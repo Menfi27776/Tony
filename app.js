@@ -1,5 +1,5 @@
 // ============================================================================
-// GROYPER MINE - EMBER VAULT EDITION (app.js)
+// GROYPER MINE - EMBER VAULT EDITION (app.js) - FULL VERSION
 // ============================================================================
 
 const tg = window.Telegram?.WebApp;
@@ -41,22 +41,19 @@ let adsState = { watched: 0, accumulated: 0 };
 // ============================================================================
 // UTILITIES
 // ============================================================================
-function showToast(message, type = 'info', duration = 3000) {
-    const toast = document.getElementById('toast');
-    const toastMsg = document.getElementById('toastMessage');
-    if (!toast || !toastMsg) return;
-    toastMsg.textContent = message;
-    toast.classList.remove('hidden');
-    toast.style.borderColor = type === 'success' ? 'var(--success)' : type === 'error' ? 'var(--danger)' : 'var(--border-light)';
-    clearTimeout(toast._timeout);
-    toast._timeout = setTimeout(() => toast.classList.add('hidden'), duration);
+function showToast(msg, type = 'info', dur = 3000) {
+    const t = document.getElementById('toast'), m = document.getElementById('toastMessage');
+    if (!t || !m) return;
+    m.textContent = msg;
+    t.classList.remove('hidden');
+    t.style.borderColor = type === 'success' ? 'var(--success)' : type === 'error' ? 'var(--danger)' : 'var(--border-light)';
+    clearTimeout(t._t);
+    t._t = setTimeout(() => t.classList.add('hidden'), dur);
 }
 
 function formatTimeLeft(ms) {
     if (ms <= 0) return '00:00:00';
-    const h = Math.floor(ms / 3600000);
-    const m = Math.floor((ms % 3600000) / 60000);
-    const s = Math.floor((ms % 60000) / 1000);
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
@@ -68,43 +65,35 @@ function vibrate(type = 'light') {
     }
 }
 
-async function apiRequest(endpoint, options = {}) {
+async function apiRequest(url, opts = {}) {
     try {
-        const res = await fetch(endpoint, { headers: { 'Content-Type': 'application/json' }, ...options });
+        const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
         return await res.json();
-    } catch (e) {
-        console.error('API Error:', e);
-        return { success: false, error: 'Network error' };
-    }
+    } catch (e) { return { success: false, error: 'Network error' }; }
 }
 
 // ============================================================================
-// TON CONNECT (Fixed)
+// TON CONNECT
 // ============================================================================
 function initTonConnect() {
-    const container = document.getElementById('ton-connect-btn');
-    if (!container || typeof TON_CONNECT_UI === 'undefined') return;
-
+    if (typeof TON_CONNECT_UI === 'undefined') return;
     try {
         window.tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
             manifestUrl: window.location.origin + '/tonconnect-manifest.json',
             buttonRootId: 'ton-connect-btn'
         });
-        
         window.tonConnectUI.onStatusChange(async wallet => {
             if (wallet) {
                 tonConnected = true;
                 tonWalletAddress = wallet.account.address;
                 updateHeaderWallet();
-                await checkAndProceed(); // الانتقال للتطبيق
+                await checkAndProceed();
             } else {
                 tonConnected = false;
                 tonWalletAddress = null;
             }
         });
-    } catch(e) {
-        console.error('TON Connect Error:', e);
-    }
+    } catch (e) { console.error('TonConnect:', e); }
 }
 
 // ============================================================================
@@ -126,7 +115,6 @@ async function fetchUserData() {
 
 async function checkAndProceed() {
     if (!tonConnected || !tonWalletAddress) return;
-    
     const res = await apiRequest('/api/user/register', {
         method: 'POST',
         body: JSON.stringify({
@@ -138,20 +126,17 @@ async function checkAndProceed() {
             startParam: tg?.initDataUnsafe?.start_param || null
         })
     });
-    
     if (res.success) {
         document.getElementById('onboardingScreen').classList.remove('active');
         document.getElementById('mainApp').style.display = 'block';
-        
         document.getElementById('userAvatar').src = tg?.initDataUnsafe?.user?.photo_url || 'https://ui-avatars.com/api/?name=U&background=FF4D00&color=fff';
         document.getElementById('userName').textContent = tg?.initDataUnsafe?.user?.first_name || 'User';
         document.getElementById('userHandle').textContent = `@${tg?.initDataUnsafe?.user?.username || 'user'}`;
-
         await fetchTokenPrice();
         await fetchUserData();
         startMiningTimer();
     } else {
-        showToast('Registration failed. Please try again.', 'error');
+        showToast('Registration failed', 'error');
     }
 }
 
@@ -163,28 +148,23 @@ async function fetchTokenPrice() {
         const res = await fetch(`https://api.dexscreener.com/tokens/v1/ton/${CONFIG.tokenAddress}`);
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
-            const pair = data[0];
-            livePriceData = { price: parseFloat(pair.priceUsd) || 0, change24h: parseFloat(pair.priceChange?.h24) || 0 };
-            renderTokenCard(pair);
+            const p = data[0];
+            livePriceData = { price: parseFloat(p.priceUsd) || 0, change24h: parseFloat(p.priceChange?.h24) || 0 };
+            document.getElementById('tokenPrice').textContent = `$${livePriceData.price.toFixed(8)}`;
+            document.getElementById('tokenMarketCap').textContent = `$${(parseFloat(p.marketCap) || 0).toLocaleString()}`;
+            document.getElementById('tokenFdv').textContent = `$${(parseFloat(p.fdv) || 0).toLocaleString()}`;
+            document.getElementById('tokenLiquidity').textContent = `$${(parseFloat(p.liquidity?.usd) || 0).toLocaleString()}`;
+            document.getElementById('tokenVolume').textContent = `$${(parseFloat(p.volume?.h24) || 0).toLocaleString()}`;
+            const ch = document.getElementById('tokenChange');
+            ch.textContent = `${livePriceData.change24h >= 0 ? '+' : ''}${livePriceData.change24h.toFixed(2)}%`;
+            ch.className = `token-change ${livePriceData.change24h >= 0 ? 'positive' : 'negative'}`;
             updateHeaderWallet();
         }
-    } catch(e) { console.error(e); }
-}
-
-function renderTokenCard(pair) {
-    document.getElementById('tokenPrice').textContent = `$${livePriceData.price.toFixed(8)}`;
-    document.getElementById('tokenMarketCap').textContent = `$${(parseFloat(pair.marketCap) || 0).toLocaleString()}`;
-    document.getElementById('tokenFdv').textContent = `$${(parseFloat(pair.fdv) || 0).toLocaleString()}`;
-    document.getElementById('tokenLiquidity').textContent = `$${(parseFloat(pair.liquidity?.usd) || 0).toLocaleString()}`;
-    document.getElementById('tokenVolume').textContent = `$${(parseFloat(pair.volume?.h24) || 0).toLocaleString()}`;
-    
-    const changeEl = document.getElementById('tokenChange');
-    changeEl.textContent = `${livePriceData.change24h >= 0 ? '+' : ''}${livePriceData.change24h.toFixed(2)}%`;
-    changeEl.className = `token-change ${livePriceData.change24h >= 0 ? 'positive' : 'negative'}`;
+    } catch (e) { console.error('DexScreener:', e); }
 }
 
 // ============================================================================
-// UI UPDATES
+// UI
 // ============================================================================
 function updateHeaderWallet() {
     if (currentUser) {
@@ -201,36 +181,32 @@ function updateHeaderWallet() {
 // ============================================================================
 function getMiningData() {
     if (!currentUser) return { canClaim: false, remainingMs: 0, progress: 0, reward: 0 };
-    const elapsed = Date.now() - (currentUser.lastMiningClaim || 0);
-    const remaining = Math.max(0, CONFIG.MINING_COOLDOWN_MS - elapsed);
+    const el = Date.now() - (currentUser.lastMiningClaim || 0);
+    const rem = Math.max(0, CONFIG.MINING_COOLDOWN_MS - el);
     return {
-        canClaim: remaining <= 0,
-        remainingMs: remaining,
-        progress: Math.min(100, (elapsed / CONFIG.MINING_COOLDOWN_MS) * 100),
+        canClaim: rem <= 0,
+        remainingMs: rem,
+        progress: Math.min(100, (el / CONFIG.MINING_COOLDOWN_MS) * 100),
         reward: CONFIG.MINING_REWARD * (currentUser.boostMultiplier || 1)
     };
 }
 
 function updateMiningUI() {
     if (!currentUser) return;
-    const data = getMiningData();
-    const ring = document.getElementById('ringProgress');
-    
+    const d = getMiningData(), ring = document.getElementById('ringProgress');
     if (ring) {
-        const circ = 2 * Math.PI * 90;
-        ring.style.strokeDashoffset = circ - (data.progress / 100) * circ;
-        ring.style.strokeDasharray = circ;
-        ring.classList.toggle('active', data.canClaim);
+        const c = 2 * Math.PI * 90;
+        ring.style.strokeDashoffset = c - (d.progress / 100) * c;
+        ring.style.strokeDasharray = c;
+        ring.classList.toggle('active', d.canClaim);
     }
-    
-    document.getElementById('minedAmount').textContent = data.reward;
-    document.getElementById('minedUsd').textContent = `≈ $${(data.reward * livePriceData.price).toFixed(2)}`;
-    document.getElementById('miningTimer').textContent = data.canClaim ? 'READY' : formatTimeLeft(data.remainingMs);
+    document.getElementById('minedAmount').textContent = d.reward;
+    document.getElementById('minedUsd').textContent = `≈ $${(d.reward * livePriceData.price).toFixed(2)}`;
+    document.getElementById('miningTimer').textContent = d.canClaim ? 'READY' : formatTimeLeft(d.remainingMs);
     document.getElementById('hashPower').textContent = `${currentUser.boostMultiplier || 1}x`;
-    
-    const btn = document.getElementById('claimMiningBtn');
-    btn.disabled = !data.canClaim;
-    btn.innerHTML = data.canClaim ? `<i class="fas fa-fire"></i> CLAIM ${data.reward} ${CONFIG.tokenSymbol}` : `<i class="fas fa-fire"></i> CLAIM MINING`;
+    const b = document.getElementById('claimMiningBtn');
+    b.disabled = !d.canClaim;
+    b.innerHTML = d.canClaim ? `<i class="fas fa-fire"></i> CLAIM ${d.reward} ${CONFIG.tokenSymbol}` : `<i class="fas fa-fire"></i> CLAIM MINING`;
 }
 
 function startMiningTimer() {
@@ -240,24 +216,19 @@ function startMiningTimer() {
 
 async function claimMining() {
     if (isClaimingMining) return;
-    const data = getMiningData();
-    if (!data.canClaim) return showToast('Not ready', 'warning');
-    
+    if (!getMiningData().canClaim) return showToast('Not ready', 'warning');
     isClaimingMining = true;
     const res = await apiRequest('/api/mining/claim', { method: 'POST', body: JSON.stringify({ userId }) });
-    
     if (res.success) {
         showToast(`✅ +${res.reward} claimed!`, 'success');
         vibrate('success');
         await fetchUserData();
-    } else {
-        showToast(res.error, 'error');
-    }
+    } else showToast(res.error, 'error');
     isClaimingMining = false;
 }
 
 // ============================================================================
-// ADS & TASKS
+// ADS
 // ============================================================================
 function initAdsState() {
     if (!currentUser) return;
@@ -267,52 +238,37 @@ function initAdsState() {
 }
 
 function renderAdsUI() {
-    const container = document.getElementById('adsSegments');
+    const c = document.getElementById('adsSegments');
     let html = '';
-    for (let i = 0; i < CONFIG.MAX_ADS_PER_BATCH; i++) {
-        html += `<div class="ads-segment ${i < adsState.watched ? 'active' : ''}"></div>`;
-    }
-    container.innerHTML = html;
-    
+    for (let i = 0; i < CONFIG.MAX_ADS_PER_BATCH; i++) html += `<div class="ads-segment ${i < adsState.watched ? 'active' : ''}"></div>`;
+    c.innerHTML = html;
     document.getElementById('adsAccumulated').textContent = `${adsState.accumulated} ${CONFIG.tokenSymbol}`;
     document.getElementById('adsCounter').textContent = `${adsState.watched}/${CONFIG.MAX_ADS_PER_BATCH}`;
-    
-    const isComplete = adsState.watched >= CONFIG.MAX_ADS_PER_BATCH;
-    document.getElementById('watchAdBtn').style.display = isComplete ? 'none' : 'flex';
-    document.getElementById('claimAdsBtn').style.display = isComplete ? 'flex' : 'none';
+    const complete = adsState.watched >= CONFIG.MAX_ADS_PER_BATCH;
+    document.getElementById('watchAdBtn').style.display = complete ? 'none' : 'flex';
+    document.getElementById('claimAdsBtn').style.display = complete ? 'flex' : 'none';
 }
 
 async function watchAd() {
     if (adSequenceActive || adsState.watched >= CONFIG.MAX_ADS_PER_BATCH) return;
     adSequenceActive = true;
     showToast('Loading ad...', 'info');
-    
-    let success = false;
+    let ok = false;
     try {
-        if (typeof window.show_12265394 === 'function') {
-            await window.show_12265394();
-            success = true;
-        }
-    } catch(e) {}
-
-    if (!success && window.TelegramAdsController) {
+        if (typeof window.show_12265394 === 'function') { await window.show_12265394(); ok = true; }
+    } catch (e) {}
+    if (!ok && window.TelegramAdsController) {
         try {
-            await new Promise((res, rej) => {
-                new TelegramAdsController().showRewardedVideo({ onReward: () => { success = true; res(); }, onError: rej });
-            });
-        } catch(e) {}
+            await new Promise((res, rej) => new TelegramAdsController().showRewardedVideo({ onReward: () => { ok = true; res(); }, onError: rej }));
+        } catch (e) {}
     }
-    
-    if (success) {
-        adsState.watched += 1;
-        adsState.accumulated += CONFIG.REWARD_PER_AD;
+    if (ok) {
+        adsState.watched++; adsState.accumulated += CONFIG.REWARD_PER_AD;
         vibrate('light');
         await apiRequest('/api/user/update', { method: 'POST', body: JSON.stringify({ userId, updates: { adsWatched: adsState.watched, adsAccumulated: adsState.accumulated } }) });
         renderAdsUI();
         showToast(`+${CONFIG.REWARD_PER_AD} ${CONFIG.tokenSymbol}!`, 'success');
-    } else {
-        showToast('No ad available', 'error');
-    }
+    } else showToast('No ad available', 'error');
     adSequenceActive = false;
 }
 
@@ -327,16 +283,18 @@ async function claimAdsReward() {
     isClaimingAds = false;
 }
 
+// ============================================================================
+// TASKS
+// ============================================================================
 function renderTasks(tasks, completed) {
-    const container = document.getElementById('taskList');
-    if (!container) return;
-    if (tasks.length === 0) return container.innerHTML = '<div class="empty-state">No tasks</div>';
-    
-    container.innerHTML = tasks.map(t => {
+    const c = document.getElementById('taskList');
+    if (!c) return;
+    if (tasks.length === 0) return c.innerHTML = '<div class="empty-state">No tasks available</div>';
+    c.innerHTML = tasks.map(t => {
         const done = completed.includes(t.id);
         return `
-            <div class="task-item">
-                <div class="task-icon"><i class="fas ${t.icon}"></i></div>
+            <div class="task-item" data-task-id="${t.id}">
+                <div class="task-icon"><i class="fas ${t.icon || 'fa-link'}"></i></div>
                 <div class="task-info">
                     <div class="task-name">${t.name}</div>
                     <div class="task-reward">+${t.reward} ${CONFIG.tokenSymbol}</div>
@@ -350,59 +308,57 @@ function renderTasks(tasks, completed) {
 
 window.startTask = async (taskId) => {
     const task = currentUser.tasks.find(t => t.id === taskId);
-    if (task) {
-        window.open(task.url, '_blank');
-        showToast('Complete task, then click Verify', 'info');
-        // Replace button with Verify
-        const items = document.querySelectorAll('.task-item');
-        items.forEach(item => {
-            if (item.innerHTML.includes(task.name)) {
-                const btn = item.querySelector('.task-btn');
-                btn.textContent = 'VERIFY';
-                btn.onclick = async () => {
-                    const res = await apiRequest('/api/tasks/verify', { method: 'POST', body: JSON.stringify({ userId, taskId }) });
-                    if (res.success) {
-                        showToast(`✅ +${res.reward} earned!`, 'success');
-                        vibrate('success');
-                        await fetchUserData();
-                    } else {
-                        showToast(res.error, 'error');
-                    }
-                };
-            }
-        });
+    if (!task) return;
+    window.open(task.url, '_blank');
+    showToast('Complete task, then click Verify', 'info');
+    const item = document.querySelector(`[data-task-id="${taskId}"]`);
+    if (item) {
+        const btn = item.querySelector('.task-btn');
+        btn.textContent = 'VERIFY';
+        btn.onclick = () => verifyTask(taskId);
     }
 };
 
+async function verifyTask(taskId) {
+    showToast('Verifying...', 'info');
+    const res = await apiRequest('/api/tasks/verify', { method: 'POST', body: JSON.stringify({ userId, taskId }) });
+    if (res.success) {
+        showToast(`✅ +${res.reward} earned!`, 'success');
+        vibrate('success');
+        await fetchUserData();
+    } else showToast(res.error, 'error');
+}
+
 // ============================================================================
-// REFERRAL & WALLET
+// REFERRAL
 // ============================================================================
 function renderReferral() {
     if (!currentUser) return;
     document.getElementById('activeReferrals').textContent = currentUser.activeReferrals || 0;
     document.getElementById('inactiveReferrals').textContent = currentUser.inactiveReferrals || 0;
-    
-    const milestoneList = document.getElementById('milestoneList');
+    const ml = document.getElementById('milestoneList');
     const claimed = currentUser.claimedMilestones || [];
-    milestoneList.innerHTML = CONFIG.MILESTONES.map(m => `
+    ml.innerHTML = CONFIG.MILESTONES.map(m => `
         <div class="milestone-item ${claimed.includes(m.count) ? 'completed' : ''}">
             <div class="milestone-icon">${claimed.includes(m.count) ? '✅' : '🔒'}</div>
-            <div class="milestone-info"><div class="milestone-count">${m.count} Referrals</div><div class="milestone-reward">+${m.reward} ${CONFIG.tokenSymbol}</div></div>
+            <div class="milestone-info">
+                <div class="milestone-count">${m.count} Referrals</div>
+                <div class="milestone-reward">+${m.reward} ${CONFIG.tokenSymbol}</div>
+            </div>
         </div>`).join('');
-    
-    const list = document.getElementById('referralList');
-    if ((currentUser.referrals || []).length === 0) {
-        list.innerHTML = '<div class="empty-state">No referrals yet</div>';
-    } else {
-        list.innerHTML = currentUser.referrals.map(r => `
-            <div class="referral-item">
-                <img src="https://ui-avatars.com/api/?name=${r.username}&background=FF4D00&color=fff">
-                <span class="referral-item-name">@${r.username}</span>
-                <span class="referral-status ${r.isActive ? 'active' : 'inactive'}">${r.isActive ? 'ACTIVE' : 'INACTIVE'}</span>
-            </div>`).join('');
-    }
+    const rl = document.getElementById('referralList');
+    if ((currentUser.referrals || []).length === 0) rl.innerHTML = '<div class="empty-state">No referrals yet</div>';
+    else rl.innerHTML = currentUser.referrals.map(r => `
+        <div class="referral-item">
+            <img src="https://ui-avatars.com/api/?name=${r.username}&background=FF4D00&color=fff">
+            <span class="referral-item-name">@${r.username}</span>
+            <span class="referral-status ${r.isActive ? 'active' : 'inactive'}">${r.isActive ? 'ACTIVE' : 'INACTIVE'}</span>
+        </div>`).join('');
 }
 
+// ============================================================================
+// WALLET
+// ============================================================================
 function renderWallet() {
     if (!currentUser) return;
     document.getElementById('walletUserName').textContent = currentUser.username || 'User';
@@ -411,17 +367,13 @@ function renderWallet() {
     document.getElementById('totalWithdrawn').textContent = `${(currentUser.totalWithdrawn || 0).toLocaleString()} ${CONFIG.tokenSymbol}`;
     document.getElementById('availableToWithdraw').textContent = `${(currentUser.balance || 0).toLocaleString()} ${CONFIG.tokenSymbol}`;
     document.getElementById('withdrawWalletAddress').textContent = tonWalletAddress ? `${tonWalletAddress.slice(0, 6)}...${tonWalletAddress.slice(-6)}` : 'Not connected';
-    
-    const history = document.getElementById('withdrawHistory');
-    if ((currentUser.withdrawals || []).length === 0) {
-        history.innerHTML = '<div class="empty-state">No withdrawals</div>';
-    } else {
-        history.innerHTML = currentUser.withdrawals.map(w => `
-            <div class="history-item">
-                <span class="history-amount">${w.amount} ${CONFIG.tokenSymbol}</span>
-                <span class="history-status ${w.status}">${w.status.toUpperCase()}</span>
-            </div>`).join('');
-    }
+    const h = document.getElementById('withdrawHistory');
+    if ((currentUser.withdrawals || []).length === 0) h.innerHTML = '<div class="empty-state">No withdrawals yet</div>';
+    else h.innerHTML = currentUser.withdrawals.map(w => `
+        <div class="history-item">
+            <span class="history-amount">${w.amount} ${CONFIG.tokenSymbol}</span>
+            <span class="history-status ${w.status}">${w.status.toUpperCase()}</span>
+        </div>`).join('');
 }
 
 async function submitWithdraw() {
@@ -429,37 +381,29 @@ async function submitWithdraw() {
     const amount = parseFloat(document.getElementById('withdrawAmount').value) || 0;
     if (amount < CONFIG.MIN_WITHDRAW) return showToast(`Minimum ${CONFIG.MIN_WITHDRAW}`, 'error');
     if (amount > currentUser.balance) return showToast('Insufficient balance', 'error');
-    
     isProcessingWithdraw = true;
     const btn = document.getElementById('withdrawBtn');
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> PROCESSING...';
-    
     try {
         if (!currentUser.withdrawFeePaid) {
-            const configRes = await apiRequest('/api/config');
-            if (!configRes.ownerWallet) throw new Error('Config error');
-            
+            const cfg = await apiRequest('/api/config');
+            if (!cfg.ownerWallet) throw new Error('Config error');
             const result = await window.tonConnectUI.sendTransaction({
                 validUntil: Math.floor(Date.now() / 1000) + 600,
-                messages: [{ address: configRes.ownerWallet, amount: (CONFIG.WITHDRAW_FEE_TON * 1e9).toString() }]
+                messages: [{ address: cfg.ownerWallet, amount: (CONFIG.WITHDRAW_FEE_TON * 1e9).toString() }]
             });
-            
-            const verify = await apiRequest('/api/withdraw/fee-verify', { method: 'POST', body: JSON.stringify({ userId, boc: result.boc }) });
-            if (!verify.success) throw new Error('Fee verification failed');
+            const v = await apiRequest('/api/withdraw/fee-verify', { method: 'POST', body: JSON.stringify({ userId, boc: result.boc }) });
+            if (!v.success) throw new Error('Fee verification failed');
             await fetchUserData();
         }
-        
         const res = await apiRequest('/api/withdraw/request', { method: 'POST', body: JSON.stringify({ userId, amount, walletAddress: tonWalletAddress }) });
         if (res.success) {
             showToast('✅ Withdrawal submitted!', 'success');
             document.getElementById('withdrawAmount').value = '';
             await fetchUserData();
-        } else {
-            showToast(res.error, 'error');
-        }
-    } catch(e) {
-        showToast(e.message || 'Failed', 'error');
-    } finally {
+        } else showToast(res.error, 'error');
+    } catch (e) { showToast(e.message || 'Failed', 'error'); }
+    finally {
         isProcessingWithdraw = false;
         btn.innerHTML = '<i class="fas fa-lock"></i> WITHDRAW';
     }
@@ -468,32 +412,29 @@ async function submitWithdraw() {
 // ============================================================================
 // NAVIGATION & INIT
 // ============================================================================
-function switchPage(pageName) {
+function switchPage(name) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById(`page${pageName.charAt(0).toUpperCase() + pageName.slice(1)}`).classList.add('active');
-    document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === pageName));
+    document.getElementById(`page${name.charAt(0).toUpperCase() + name.slice(1)}`).classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === name));
     vibrate('light');
 }
 
 function init() {
     userId = tg?.initDataUnsafe?.user?.id?.toString() || new URLSearchParams(window.location.search).get('userId');
     if (!userId) return showToast('Open from Telegram', 'error');
-    
     initTonConnect();
-    
-    document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', () => switchPage(item.dataset.page)));
+    document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => switchPage(i.dataset.page)));
     document.getElementById('claimMiningBtn').onclick = claimMining;
     document.getElementById('watchAdBtn').onclick = watchAd;
     document.getElementById('claimAdsBtn').onclick = claimAdsReward;
     document.getElementById('withdrawBtn').onclick = submitWithdraw;
-    
     document.getElementById('copyReferralBtn').onclick = () => {
         navigator.clipboard.writeText(`https://t.me/GroyperMinebot/Mine?startapp=${userId}`);
         showToast('Link copied!', 'success');
     };
     document.getElementById('shareReferralBtn').onclick = () => {
-        const link = `https://t.me/GroyperMinebot/Mine?startapp=${userId}`;
-        window.open(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=Join Groyper Mine!`);
+        const l = `https://t.me/GroyperMinebot/Mine?startapp=${userId}`;
+        window.open(`https://t.me/share/url?url=${encodeURIComponent(l)}&text=Join Groyper Mine!`);
     };
     document.getElementById('refreshTokenBtn').onclick = fetchTokenPrice;
     document.getElementById('copyContractBtn').onclick = () => {
@@ -503,29 +444,23 @@ function init() {
     document.getElementById('maxWithdrawBtn').onclick = () => {
         document.getElementById('withdrawAmount').value = Math.floor(currentUser?.balance || 0);
     };
-    
     window.buyBoost = async (type) => {
         if (!tonConnected) return showToast('Connect wallet first', 'warning');
-        const boost = CONFIG.BOOSTS[type];
-        if (!confirm(`Activate ${boost.name} Boost for ${boost.price} TON?`)) return;
-        
+        const b = CONFIG.BOOSTS[type];
+        if (!confirm(`Activate ${b.name} Boost for ${b.price} TON?`)) return;
         try {
-            const configRes = await apiRequest('/api/config');
-            const result = await window.tonConnectUI.sendTransaction({
+            const cfg = await apiRequest('/api/config');
+            const r = await window.tonConnectUI.sendTransaction({
                 validUntil: Math.floor(Date.now() / 1000) + 600,
-                messages: [{ address: configRes.ownerWallet, amount: (boost.price * 1e9).toString() }]
+                messages: [{ address: cfg.ownerWallet, amount: (b.price * 1e9).toString() }]
             });
-            const verify = await apiRequest('/api/boost/verify', { method: 'POST', body: JSON.stringify({ userId, boostType: type, boc: result.boc }) });
-            if (verify.success) {
-                showToast(`🔥 ${boost.name} Boost activated!`, 'success');
+            const v = await apiRequest('/api/boost/verify', { method: 'POST', body: JSON.stringify({ userId, boostType: type, boc: r.boc }) });
+            if (v.success) {
+                showToast(`🔥 ${b.name} Boost activated!`, 'success');
                 await fetchUserData();
-            } else {
-                showToast(verify.error, 'error');
-            }
-        } catch(e) { showToast('Payment failed', 'error'); }
+            } else showToast(v.error, 'error');
+        } catch (e) { showToast('Payment failed', 'error'); }
     };
-    
-    // Check if already connected
     if (window.tonConnectUI?.wallet) {
         tonConnected = true;
         tonWalletAddress = window.tonConnectUI.wallet.account.address;
