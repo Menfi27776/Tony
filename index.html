@@ -4,14 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#07080D">
+    <meta name="format-detection" content="telephone=no">
     <title>Groyper Mine · Ember Vault</title>
 
     <!-- Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    
-    <!-- TON Connect — MUST be before app.js -->
+
+    <!-- TON Connect (PINNED VERSION — NOT @latest) -->
     <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
-    
+
     <!-- Ad Networks -->
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
     <script src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"></script>
@@ -20,35 +21,55 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
+    <!-- Custom Styles -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <canvas id="embersCanvas"></canvas>
 
-    <!-- ==================== ONBOARDING (ALWAYS VISIBLE INITIALLY) ==================== -->
+    <!-- Ambient Embers Canvas -->
+    <canvas id="embersCanvas" aria-hidden="true"></canvas>
+
+    <!-- ==================== ONBOARDING SCREEN ==================== -->
     <div id="onboardingScreen" class="screen active">
         <div class="onboarding-content">
-            <img src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553" alt="GROYP" class="onboarding-logo">
+            <img
+                src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553"
+                alt="GROYP Logo"
+                class="onboarding-logo"
+                loading="eager">
             <h1 class="onboarding-title">Ignite Your Fire</h1>
             <p class="onboarding-subtitle">Mine GROYP · Build Your Vault</p>
+
             <div class="onboarding-features">
-                <div class="feature-item"><i class="fas fa-fire"></i><span>24/7 Mining</span></div>
-                <div class="feature-item"><i class="fas fa-gift"></i><span>Daily Rewards</span></div>
-                <div class="feature-item"><i class="fas fa-users"></i><span>Invite & Earn</span></div>
+                <div class="feature-item">
+                    <i class="fas fa-fire" aria-hidden="true"></i>
+                    <span>24/7 Mining</span>
+                </div>
+                <div class="feature-item">
+                    <i class="fas fa-gift" aria-hidden="true"></i>
+                    <span>Daily Rewards</span>
+                </div>
+                <div class="feature-item">
+                    <i class="fas fa-users" aria-hidden="true"></i>
+                    <span>Invite & Earn</span>
+                </div>
             </div>
-            
-            <!-- ===== THIS IS THE CRITICAL ELEMENT ===== -->
-            <div id="ton-connect-btn" style="display:flex; justify-content:center; min-height:52px; margin: 8px 0;"></div>
-            
+
+            <!-- TonConnect Button Injection Point -->
+            <div id="ton-connect-btn" style="display:flex;justify-content:center;min-height:52px;margin:8px 0;"></div>
+
             <p class="onboarding-note">Connect your wallet to start mining</p>
         </div>
     </div>
 
-    <!-- ==================== MAIN APP (hidden initially) ==================== -->
+    <!-- ==================== MAIN APP ==================== -->
     <div id="mainApp" class="app-container" style="display:none;">
-        <!-- ... (keep all the content from before) ... -->
+
+        <!-- ==================== HEADER ==================== -->
         <header class="app-header">
             <div class="header-user">
                 <img id="userAvatar" src="" alt="User" class="user-avatar">
@@ -58,16 +79,21 @@
                 </div>
             </div>
             <div class="header-wallet">
-                <span class="wallet-address" id="headerAddress"><i class="fas fa-wallet"></i> —</span>
+                <span class="wallet-address" id="headerAddress">
+                    <i class="fas fa-wallet" aria-hidden="true"></i> —
+                </span>
                 <span class="wallet-balance" id="headerBalance">0 GROYP</span>
                 <span class="wallet-value" id="headerValue">≈ $0.00</span>
             </div>
         </header>
 
+        <!-- ==================== HOME PAGE ==================== -->
         <section id="pageHome" class="page active">
+
+            <!-- Mining Hero -->
             <div class="card mining-card">
                 <div class="mining-ring-container">
-                    <svg class="mining-ring" viewBox="0 0 200 200">
+                    <svg class="mining-ring" viewBox="0 0 200 200" aria-hidden="true">
                         <defs>
                             <linearGradient id="fireGradient" x1="0%" y1="0%" x2="100%" y2="100%">
                                 <stop offset="0%" stop-color="#FF4D00"/>
@@ -75,130 +101,315 @@
                                 <stop offset="100%" stop-color="#FFC93D"/>
                             </linearGradient>
                         </defs>
-                        <circle class="ring-bg" cx="100" cy="100" r="90"/>
-                        <circle class="ring-progress loading" id="ringProgress" cx="100" cy="100" r="90" stroke="url(#fireGradient)"/>
+                        <circle class="ring-bg" cx="100" cy="100" r="90"></circle>
+                        <circle class="ring-progress loading" id="ringProgress" cx="100" cy="100" r="90" stroke="url(#fireGradient)"></circle>
                     </svg>
                     <div class="mining-core-content">
                         <span class="core-label">MINED</span>
                         <span class="core-amount" id="minedAmount">0</span>
-                        <span class="core-currency">GROYP</span>
+                        <span class="core-currency" id="coreCurrency">GROYP</span>
                         <span class="core-usd" id="minedUsd">≈ $0.00</span>
                     </div>
                 </div>
+
                 <div class="mining-stats">
-                    <div class="stat-pill"><i class="fas fa-bolt"></i><span id="hashPower">1x</span></div>
-                    <div class="stat-pill"><i class="fas fa-clock"></i><span id="miningTimer">06:00:00</span></div>
+                    <div class="stat-pill">
+                        <i class="fas fa-bolt" aria-hidden="true"></i>
+                        <span id="hashPower">1x</span>
+                    </div>
+                    <div class="stat-pill">
+                        <i class="fas fa-clock" aria-hidden="true"></i>
+                        <span id="miningTimer">06:00:00</span>
+                    </div>
                 </div>
+
                 <button id="claimMiningBtn" class="btn-claim" disabled>
-                    <i class="fas fa-fire"></i><span id="claimLabel">CLAIM MINING</span>
+                    <i class="fas fa-fire" aria-hidden="true"></i>
+                    <span id="claimLabel">CLAIM MINING</span>
                 </button>
             </div>
 
+            <!-- Token Card -->
             <div class="card token-card">
                 <div class="token-header">
-                    <img src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553" class="token-logo" alt="GROYP">
+                    <img
+                        src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553"
+                        alt="GROYP"
+                        class="token-logo"
+                        loading="lazy">
                     <div class="token-info">
                         <h3 class="token-name">Groyper</h3>
                         <span class="token-symbol">$GROYP</span>
                     </div>
-                    <button id="refreshTokenBtn" class="btn-refresh" aria-label="Refresh"><i class="fas fa-sync-alt"></i></button>
+                    <button id="refreshTokenBtn" class="btn-refresh" aria-label="Refresh price">
+                        <i class="fas fa-sync-alt" aria-hidden="true"></i>
+                    </button>
                 </div>
+
                 <div class="token-price-section">
                     <span class="token-price" id="tokenPrice">$0.00000000</span>
                     <span class="token-change" id="tokenChange">+0.00%</span>
                 </div>
+
                 <div class="token-stats-grid">
-                    <div class="stat-box"><span class="stat-label">MARKET CAP</span><span class="stat-value" id="tokenMarketCap">$0</span></div>
-                    <div class="stat-box"><span class="stat-label">FDV</span><span class="stat-value" id="tokenFdv">$0</span></div>
-                    <div class="stat-box"><span class="stat-label">LIQUIDITY</span><span class="stat-value" id="tokenLiquidity">$0</span></div>
-                    <div class="stat-box"><span class="stat-label">VOL 24H</span><span class="stat-value" id="tokenVolume">$0</span></div>
+                    <div class="stat-box">
+                        <span class="stat-label">MARKET CAP</span>
+                        <span class="stat-value" id="tokenMarketCap">$0</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">FDV</span>
+                        <span class="stat-value" id="tokenFdv">$0</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">LIQUIDITY</span>
+                        <span class="stat-value" id="tokenLiquidity">$0</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-label">VOL 24H</span>
+                        <span class="stat-value" id="tokenVolume">$0</span>
+                    </div>
                 </div>
+
                 <div class="token-footer">
-                    <span class="contract-address" id="contractAddress"><i class="fas fa-file-contract"></i> EQBv…jAG_CH</span>
-                    <button id="copyContractBtn" class="btn-copy" aria-label="Copy contract"><i class="fas fa-copy"></i></button>
+                    <span class="contract-address" id="contractAddress">
+                        <i class="fas fa-file-contract" aria-hidden="true"></i> EQBv…jAG_CH
+                    </span>
+                    <button id="copyContractBtn" class="btn-copy" aria-label="Copy contract address">
+                        <i class="fas fa-copy" aria-hidden="true"></i>
+                    </button>
                 </div>
             </div>
 
-            <div class="section-title"><i class="fas fa-rocket"></i><span>BOOST YOUR MINING</span></div>
+            <!-- Boost Plans -->
+            <div class="section-title">
+                <i class="fas fa-rocket" aria-hidden="true"></i>
+                <span>BOOST YOUR MINING</span>
+            </div>
+
             <div class="boost-scroll">
-                <div class="boost-card" data-boost="bronze"><div class="boost-icon">🥉</div><div class="boost-name">SPARK</div><div class="boost-mult">2x</div><div class="boost-price">1 TON</div></div>
-                <div class="boost-card tier-silver" data-boost="silver"><div class="boost-icon">🥈</div><div class="boost-name">BLAZE</div><div class="boost-mult">5x</div><div class="boost-price">2.5 TON</div></div>
-                <div class="boost-card tier-gold" data-boost="gold"><div class="best-badge">BEST</div><div class="boost-icon">🥇</div><div class="boost-name">INFERNO</div><div class="boost-mult">12x</div><div class="boost-price">10 TON</div></div>
+                <div class="boost-card" data-boost="bronze" role="button" tabindex="0">
+                    <div class="boost-icon">🥉</div>
+                    <div class="boost-name">SPARK</div>
+                    <div class="boost-mult">2x</div>
+                    <div class="boost-price">1 TON</div>
+                </div>
+                <div class="boost-card tier-silver" data-boost="silver" role="button" tabindex="0">
+                    <div class="boost-icon">🥈</div>
+                    <div class="boost-name">BLAZE</div>
+                    <div class="boost-mult">5x</div>
+                    <div class="boost-price">2.5 TON</div>
+                </div>
+                <div class="boost-card tier-gold" data-boost="gold" role="button" tabindex="0">
+                    <div class="best-badge">BEST</div>
+                    <div class="boost-icon">🥇</div>
+                    <div class="boost-name">INFERNO</div>
+                    <div class="boost-mult">12x</div>
+                    <div class="boost-price">10 TON</div>
+                </div>
             </div>
         </section>
 
+        <!-- ==================== EARN PAGE ==================== -->
         <section id="pageEarn" class="page">
+
+            <!-- Ads Card -->
             <div class="card">
-                <h3 class="card-title"><i class="fas fa-play-circle"></i><span>Watch & Earn</span></h3>
-                <div class="ads-segments" id="adsSegments"></div>
-                <div class="ads-reward"><span class="ads-accumulated" id="adsAccumulated">0 GROYP</span><span class="ads-counter" id="adsCounter">0/10</span></div>
-                <button id="watchAdBtn" class="btn-primary"><i class="fas fa-play"></i><span id="watchAdLabel">WATCH AD (+2 GROYP)</span></button>
-                <button id="claimAdsBtn" class="btn-claim" style="display:none"><i class="fas fa-check"></i><span id="claimAdsLabel">CLAIM 20 GROYP</span></button>
-                <div id="adsCooldown" class="ads-cooldown" style="display:none">Next batch in: <span id="adsTimer">06:00:00</span></div>
+                <h3 class="card-title">
+                    <i class="fas fa-play-circle" aria-hidden="true"></i>
+                    <span>Watch & Earn</span>
+                </h3>
+
+                <div class="ads-segments" id="adsSegments" aria-label="Ad progress"></div>
+
+                <div class="ads-reward">
+                    <span class="ads-accumulated" id="adsAccumulated">0 GROYP</span>
+                    <span class="ads-counter" id="adsCounter">0/10</span>
+                </div>
+
+                <button id="watchAdBtn" class="btn-primary">
+                    <i class="fas fa-play" aria-hidden="true"></i>
+                    <span id="watchAdLabel">WATCH AD (+2 GROYP)</span>
+                </button>
+
+                <button id="claimAdsBtn" class="btn-claim" style="display:none">
+                    <i class="fas fa-check" aria-hidden="true"></i>
+                    <span id="claimAdsLabel">CLAIM 20 GROYP</span>
+                </button>
+
+                <div id="adsCooldown" class="ads-cooldown" style="display:none">
+                    Next batch in: <span id="adsTimer">06:00:00</span>
+                </div>
             </div>
 
+            <!-- Daily Check-in -->
             <div class="card checkin-card">
-                <div><h3>Daily Check-in</h3><span id="streakCount">0 day streak</span></div>
-                <button id="checkinBtn" class="btn-primary"><i class="fas fa-calendar-check"></i> CHECK IN</button>
+                <div>
+                    <h3>Daily Check-in</h3>
+                    <span id="streakCount">0 day streak</span>
+                </div>
+                <button id="checkinBtn" class="btn-primary">
+                    <i class="fas fa-calendar-check" aria-hidden="true"></i>
+                    CHECK IN
+                </button>
             </div>
 
+            <!-- Daily Tasks -->
             <div class="card">
-                <h3 class="card-title"><i class="fas fa-tasks"></i><span>Daily Tasks</span></h3>
+                <h3 class="card-title">
+                    <i class="fas fa-tasks" aria-hidden="true"></i>
+                    <span>Daily Tasks</span>
+                </h3>
                 <div class="task-list" id="taskList"></div>
             </div>
         </section>
 
+        <!-- ==================== REFERRAL PAGE ==================== -->
         <section id="pageReferral" class="page">
+
+            <!-- Invite Card -->
             <div class="card invite-card">
-                <div class="invite-glow"></div>
+                <div class="invite-glow" aria-hidden="true"></div>
                 <h2 class="invite-title">Invite Friends,<br>Share the Fire 🔥</h2>
-                <p class="invite-reward">Earn <strong id="refRewardText">75 GROYP</strong> per active referral</p>
+                <p class="invite-reward">
+                    Earn <strong id="refRewardText">75 GROYP</strong> per active referral
+                </p>
                 <div class="invite-buttons">
-                    <button id="copyReferralBtn" class="btn-primary"><i class="fas fa-copy"></i><span>Copy Link</span></button>
-                    <button id="shareReferralBtn" class="btn-secondary"><i class="fas fa-share"></i><span>Share</span></button>
+                    <button id="copyReferralBtn" class="btn-primary">
+                        <i class="fas fa-copy" aria-hidden="true"></i>
+                        <span>Copy Link</span>
+                    </button>
+                    <button id="shareReferralBtn" class="btn-secondary">
+                        <i class="fas fa-share" aria-hidden="true"></i>
+                        <span>Share</span>
+                    </button>
                 </div>
             </div>
+
+            <!-- Stats -->
             <div class="referral-stats">
-                <div class="stat-card active"><span class="stat-number" id="activeReferrals">0</span><span class="stat-label">ACTIVE</span></div>
-                <div class="stat-card inactive"><span class="stat-number" id="inactiveReferrals">0</span><span class="stat-label">INACTIVE</span></div>
+                <div class="stat-card active">
+                    <span class="stat-number" id="activeReferrals">0</span>
+                    <span class="stat-label">ACTIVE</span>
+                </div>
+                <div class="stat-card inactive">
+                    <span class="stat-number" id="inactiveReferrals">0</span>
+                    <span class="stat-label">INACTIVE</span>
+                </div>
             </div>
-            <div class="card"><h3 class="card-title"><i class="fas fa-trophy"></i><span>Milestones</span></h3><div class="milestone-list" id="milestoneList"></div></div>
-            <div class="card"><h3 class="card-title"><i class="fas fa-users"></i><span>Your Network</span></h3><div id="referralList" class="referral-list"><div class="empty-state">No referrals yet</div></div></div>
+
+            <!-- Milestones -->
+            <div class="card">
+                <h3 class="card-title">
+                    <i class="fas fa-trophy" aria-hidden="true"></i>
+                    <span>Milestones</span>
+                </h3>
+                <div class="milestone-list" id="milestoneList"></div>
+            </div>
+
+            <!-- Referrals List -->
+            <div class="card">
+                <h3 class="card-title">
+                    <i class="fas fa-users" aria-hidden="true"></i>
+                    <span>Your Network</span>
+                </h3>
+                <div id="referralList" class="referral-list">
+                    <div class="empty-state">No referrals yet</div>
+                </div>
+            </div>
         </section>
 
+        <!-- ==================== WALLET PAGE ==================== -->
         <section id="pageWallet" class="page">
+
+            <!-- User Card -->
             <div class="card user-card">
                 <img id="walletAvatar" src="" alt="User" class="wallet-avatar">
-                <div class="wallet-user-info"><h3 id="walletUserName">Loading…</h3><span id="walletUserHandle">@user</span></div>
+                <div class="wallet-user-info">
+                    <h3 id="walletUserName">Loading…</h3>
+                    <span id="walletUserHandle">@user</span>
+                </div>
                 <div class="wallet-stats">
-                    <div class="wallet-stat"><span class="wallet-stat-label">TOTAL WITHDRAWN</span><span class="wallet-stat-value" id="totalWithdrawn">0 GROYP</span></div>
-                    <div class="wallet-stat highlight"><span class="wallet-stat-label">AVAILABLE TO WITHDRAW</span><span class="wallet-stat-value" id="availableToWithdraw">0 GROYP</span></div>
+                    <div class="wallet-stat">
+                        <span class="wallet-stat-label">TOTAL WITHDRAWN</span>
+                        <span class="wallet-stat-value" id="totalWithdrawn">0 GROYP</span>
+                    </div>
+                    <div class="wallet-stat highlight">
+                        <span class="wallet-stat-label">AVAILABLE TO WITHDRAW</span>
+                        <span class="wallet-stat-value" id="availableToWithdraw">0 GROYP</span>
+                    </div>
                 </div>
             </div>
+
+            <!-- Withdraw Form -->
             <div class="card">
-                <h3 class="card-title"><i class="fas fa-paper-plane"></i><span>Withdraw</span></h3>
+                <h3 class="card-title">
+                    <i class="fas fa-paper-plane" aria-hidden="true"></i>
+                    <span>Withdraw</span>
+                </h3>
+
                 <div class="input-group">
-                    <input type="number" id="withdrawAmount" placeholder="0" class="amount-input" inputmode="numeric">
+                    <input
+                        type="number"
+                        id="withdrawAmount"
+                        placeholder="0"
+                        class="amount-input"
+                        inputmode="numeric"
+                        autocomplete="off">
                     <button id="maxWithdrawBtn" class="btn-max">MAX</button>
                 </div>
                 <span class="input-hint" id="minWithdrawHint">Minimum: 2,000 GROYP</span>
-                <div class="wallet-address-display"><i class="fas fa-wallet"></i><span id="withdrawWalletAddress">—</span></div>
-                <button id="withdrawBtn" class="btn-primary btn-gold"><i class="fas fa-lock"></i><span>WITHDRAW</span></button>
+
+                <div class="wallet-address-display">
+                    <i class="fas fa-wallet" aria-hidden="true"></i>
+                    <span id="withdrawWalletAddress">—</span>
+                </div>
+
+                <button id="withdrawBtn" class="btn-primary btn-gold">
+                    <i class="fas fa-lock" aria-hidden="true"></i>
+                    <span>WITHDRAW</span>
+                </button>
             </div>
-            <div class="card"><h3 class="card-title"><i class="fas fa-history"></i><span>Withdrawal History</span></h3><div id="withdrawHistory" class="history-list"><div class="empty-state">No withdrawals yet</div></div></div>
+
+            <!-- Withdrawal History -->
+            <div class="card">
+                <h3 class="card-title">
+                    <i class="fas fa-history" aria-hidden="true"></i>
+                    <span>Withdrawal History</span>
+                </h3>
+                <div id="withdrawHistory" class="history-list">
+                    <div class="empty-state">No withdrawals yet</div>
+                </div>
+            </div>
         </section>
 
-        <nav class="bottom-nav">
-            <button class="nav-item active" data-page="home"><i class="fas fa-home"></i><span>Home</span></button>
-            <button class="nav-item" data-page="earn"><i class="fas fa-gift"></i><span>Earn</span></button>
-            <button class="nav-item" data-page="referral"><i class="fas fa-users"></i><span>Invite</span></button>
-            <button class="nav-item" data-page="wallet"><i class="fas fa-wallet"></i><span>Wallet</span></button>
+        <!-- ==================== BOTTOM NAVIGATION ==================== -->
+        <nav class="bottom-nav" aria-label="Main navigation">
+            <button class="nav-item active" data-page="home" aria-label="Home">
+                <i class="fas fa-home" aria-hidden="true"></i>
+                <span>Home</span>
+            </button>
+            <button class="nav-item" data-page="earn" aria-label="Earn">
+                <i class="fas fa-gift" aria-hidden="true"></i>
+                <span>Earn</span>
+            </button>
+            <button class="nav-item" data-page="referral" aria-label="Invite">
+                <i class="fas fa-users" aria-hidden="true"></i>
+                <span>Invite</span>
+            </button>
+            <button class="nav-item" data-page="wallet" aria-label="Wallet">
+                <i class="fas fa-wallet" aria-hidden="true"></i>
+                <span>Wallet</span>
+            </button>
         </nav>
     </div>
 
-    <div id="toast" class="toast hidden"><span id="toastMessage"></span></div>
+    <!-- ==================== TOAST ==================== -->
+    <div id="toast" class="toast hidden" role="status" aria-live="polite">
+        <span id="toastMessage"></span>
+    </div>
 
-    <!-- app.js AFTER everything -->
+    <!-- ==================== APP SCRIPT ==================== -->
     <script src="app.js" defer></script>
+
 </body>
 </html>
