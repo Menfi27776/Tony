@@ -69,7 +69,7 @@ log('🔥 Firebase initialized');
 // ============================================================================
 const DEFAULTS = {
     symbol: 'GROYP',
-    tokenAddress: 'EQBvcsqG7hqsw-HQ8bemIYrO8I_GLDTSbNiro4WOC7jAG_CH',
+    tokenAddress: 'EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     channelUrl: 'https://t.me/GroyperMine',
     groupUrl: 'https://t.me/communityGROYP',
     dexUrl: 'https://dedust.io/swap/TON/EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
