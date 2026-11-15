@@ -63,12 +63,15 @@ const LS = {
 
 // ---------- API (auth = Telegram initData, verified on server) ----------
 async function api(path, { method = 'GET', body } = {}) {
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 45000); // Render free cold start can take ~30-50s
   try {
     const res = await fetch('/api' + path, {
       method,
+      signal: ctl.signal,
       headers: { 'Content-Type': 'application/json', Authorization: 'tma ' + (tg?.initData || '') },
       body: body ? JSON.stringify(body) : undefined
     });
+    clearTimeout(to);
     const data = await res.json().catch(() => ({}));
     setOffline(false);
     if (res.status === 503) { showMaintenance(); return { ok: false, error: t('maint') }; }
@@ -157,22 +160,22 @@ function renderAds() {
 async function watchAd() {
   if (!S.user || (S.user.adsWatched || 0) >= CFG.adsPerBatch || adsCooldownLeft() > 0) return;
   return once('ad', async () => {
-    const s = await api('/ads/start', { method: 'POST' });
+    const s = await api('/ads/start', { method: 'POST', body: { token: S.user.adsToken } });
     if (!s.ok) return toast(s.error, 'error');
     let ok = false;
     try { if (typeof window.show_12265394 === 'function') { await window.show_12265394({ ymid: s.data.ymid }); ok = true; } } catch {}
     if (!ok) return toast(t('noAd'), 'error');
-    const r = await api('/ads/watch', { method: 'POST', body: { ymid: s.data.ymid } });
-    if (r.ok) { S.user.adsWatched = r.data.watched; haptic('light'); renderAds(); }
+    const r = await api('/ads/watch', { method: 'POST', body: { ymid: s.data.ymid, token: s.data.token } });
+    if (r.ok) { S.user.adsWatched = r.data.watched; S.user.adsToken = r.data.token; haptic('light'); renderAds(); persist(); }
     else toast(r.error, 'error');
   });
 }
 
 async function claimAds() {
   return once('adsClaim', async () => {
-    const r = await api('/ads/claim', { method: 'POST' });
+    const r = await api('/ads/claim', { method: 'POST', body: { token: S.user.adsToken } });
     if (r.ok) { merge(r.data.user); toast(`✅ +${r.data.reward} ${CFG.symbol}`, 'success'); haptic('success'); sparks($('claimAdsBtn')); }
-    else toast(r.error, 'error');
+    else { toast(r.error, 'error'); if (/expired|Watch all/i.test(r.error)) { S.user.adsToken = null; S.user.adsWatched = 0; } }
     renderAll();
   });
 }
@@ -449,14 +452,18 @@ function friendly(raw) { try { return TON_CONNECT_UI.toUserFriendlyAddress(raw, 
 
 function initTon() {
   if (typeof TON_CONNECT_UI === 'undefined') return toast(t('netErr'), 'error');
-  window.tonConnectUI = new TON_CONNECT_UI.TonConnectUI({ manifestUrl: location.origin + '/tonconnect-manifest.json', buttonRootId: 'ton-connect-btn', language: lang });
-  window.tonConnectUI.onStatusChange(async w => {
+  const ui = window.tonConnectUI = new TON_CONNECT_UI.TonConnectUI({ manifestUrl: location.origin + '/tonconnect-manifest.json', buttonRootId: 'ton-connect-btn', language: lang });
+  // ton_proof: ask the wallet to sign a server-issued challenge (proves ownership)
+  ui.setConnectRequestParameters({ state: 'loading' });
+  api('/proof-payload').then(r => ui.setConnectRequestParameters(r.ok ? { state: 'ready', value: { tonProof: r.data.payload } } : null));
+  ui.onStatusChange(async w => {
     if (!w) { S.wallet = null; if (S.booted && !S.user?.wallet) showOnboarding(); return; }
-    S.wallet = friendly(w.account.address);
-    if (S.user && S.user.wallet === S.wallet) { renderHeader(); return; }
-    // First-time registration (or wallet change): ONE write
-    const r = await api('/register', { method: 'POST', body: { wallet: S.wallet, startParam: tg?.initDataUnsafe?.start_param || null } });
-    if (r.ok) { S.user = r.data.user; enterApp(); } else toast(r.error, 'error');
+    if (S.user?.walletRaw === w.account.address) { S.wallet = S.user.wallet; renderHeader(); return; }
+    const proof = w.connectItems?.tonProof?.proof;
+    if (!proof) { if (S.booted && !S.user?.wallet) ui.disconnect(); return; }   // restored session without proof
+    const r = await api('/register', { method: 'POST', body: { address: w.account.address, publicKey: w.account.publicKey, stateInit: w.account.walletStateInit, proof } });
+    if (r.ok) { S.user = r.data.user; S.wallet = S.user.wallet; enterApp(); }
+    else { toast(r.error, 'error', 5000); ui.disconnect(); }
   });
 }
 
@@ -496,13 +503,21 @@ function bind() {
 }
 
 async function boot(silent = false) {
-  const r = await api('/init');
+  let r = await api('/init');
+  for (let i = 0; i < 3 && !r.ok && r.error === t('netErr'); i++) {   // server may be waking up
+    if (!silent) toast(lang === 'ar' ? '⏳ جارٍ تشغيل الخادم...' : '⏳ Waking up server...', 'info', 6000);
+    await new Promise(res => setTimeout(res, 4000 * (i + 1)));
+    r = await api('/init');
+  }
   if (!r.ok) { if (!silent && !S.user) showOnboarding(); return; }
   const d = r.data; S.lastSync = Date.now();
   Object.assign(CFG, d.config || {});
   S.serverOffset = (d.serverTime || Date.now()) - Date.now();
   S.tasks = d.tasks || []; S.price = d.price || S.price;
-  if (d.user && d.user.wallet) { S.user = d.user; S.wallet = S.wallet || d.user.wallet; enterApp(); }
+  if (d.user && d.user.wallet) {
+    const keep = S.user?.adsToken && (S.user.adsCooldownUntil || 0) === (d.user.adsCooldownUntil || 0) ? { adsToken: S.user.adsToken, adsWatched: S.user.adsWatched || 0 } : { adsToken: null, adsWatched: 0 };
+    S.user = { ...d.user, ...keep }; S.wallet = d.user.wallet; enterApp();
+  }
   else showOnboarding();
   if (d.banner) toast(d.banner, 'info', 5000);
 }
