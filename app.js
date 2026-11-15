@@ -1,9 +1,9 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.3
-// Full rewrite: keeps every function, fixes 2 bugs, adds 4 features.
-// Fixes:    raw <i> in contract, "Loading…" stuck in referral link
-// Adds:     random ad provider (Monetag ↔ RichAds), full token card render,
-//           fallback server price, header USD value, referral earnings card
+// GROYPER MINE — EMBER VAULT v2.4
+// Full rewrite with all fixes and new integrations.
+// Fixes:    referral link format (/Mine?startapp=), ad loading freeze
+// Adds:     Adexium (interstitial, manual only), Monetag + Adexium rotation,
+//           removed RichAds (does not support manual show)
 // ============================================================================
 'use strict';
 
@@ -25,6 +25,7 @@ const CONFIG = {
     tokenSymbol: 'GROYP',
     tokenAddress: 'EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     botUsername: 'GroyperMinebot',
+    botShortName: 'Mine',
     MINING_REWARD: 20,
     MINING_COOLDOWN_MS: 6 * 60 * 60 * 1000,
     REWARD_PER_AD: 2,
@@ -137,6 +138,12 @@ async function copyToClipboard(text) {
         document.body.removeChild(ta);
         return ok;
     } catch { return false; }
+}
+
+// Build the correct referral link (opens Mini App directly)
+function buildReferralLink(uid) {
+    if (!uid) return '';
+    return `https://t.me/${CONFIG.botUsername}/${CONFIG.botShortName}?startapp=${uid}`;
 }
 
 // ----------------------------------------------------------------------------
@@ -431,7 +438,7 @@ function renderToken() {
     set('tokenLiquidity', fmtMoney(livePriceData.liq));
     set('tokenVolume',    fmtMoney(livePriceData.vol));
 
-    // Contract address — MUST use innerHTML (fix raw <i> display)
+    // Contract address — MUST use innerHTML
     const ca = $('contractAddress');
     if (ca) {
         const shortAddr = CONFIG.tokenAddress.slice(0, 6) + '…' + CONFIG.tokenAddress.slice(-6);
@@ -461,7 +468,7 @@ function updateHeaderWallet() {
 }
 
 // ----------------------------------------------------------------------------
-// 9. MINING — live computation from time only (zero DB writes)
+// 9. MINING
 // ----------------------------------------------------------------------------
 function getMiningData() {
     if (!currentUser) return { canClaim: false, remainingMs: 0, progress: 0, reward: 0, liveAccrued: 0, multiplier: 1 };
@@ -533,7 +540,6 @@ function renderMining() {
         }
     }
 
-    // Vault balance inside mining card
     const vaultBal = $('collectedBalance');
     if (vaultBal) {
         const balance = currentUser.balance || 0;
@@ -571,7 +577,7 @@ async function claimMining() {
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — random provider (Monetag ↔ RichAds)
+// 10. ADS — Monetag + Adexium (manual only)
 // ----------------------------------------------------------------------------
 function getAdsCooldownLeft() {
     return Math.max(0, (currentUser?.adsCooldownUntil || 0) - now());
@@ -611,62 +617,70 @@ function renderAds() {
     }
 }
 
-// Random provider: 50% Monetag, 50% RichAds
+// Adexium — try every known show method safely
+function showAdexiumAd() {
+    const w = window.adexiumWidget;
+    if (!w) return false;
+
+    const methods = ['show', 'showAd', 'showInterstitial', 'display', 'open'];
+    for (const m of methods) {
+        if (typeof w[m] === 'function') {
+            try {
+                w[m]();
+                console.log(`📺 Ad provider: Adexium (${m})`);
+                return true;
+            } catch (e) {
+                console.warn(`Adexium.${m} failed:`, e);
+            }
+        }
+    }
+    return false;
+}
+
+// Monetag
+function showMonetagAd() {
+    if (typeof window.show_12265394 !== 'function') return false;
+    try {
+        window.show_12265394({
+            type: 'inApp',
+            inAppSettings: {
+                frequency: 2,
+                capping: 0.1,
+                interval: 30,
+                timeout: 5,
+                everyPage: false
+            }
+        });
+        console.log('📺 Ad provider: Monetag');
+        return true;
+    } catch (e) {
+        console.warn('Monetag failed:', e);
+        return false;
+    }
+}
+
+// Random provider: 50% Monetag, 50% Adexium
 function tryTriggerAdSDK() {
-    const useMonetag = Math.random() < 0.5;
+    const providers = [];
 
-    // Monetag
-    if (useMonetag && typeof window.show_12265394 === 'function') {
-        try {
-            window.show_12265394({
-                type: 'inApp',
-                inAppSettings: {
-                    frequency: 2,
-                    capping: 0.1,
-                    interval: 30,
-                    timeout: 5,
-                    everyPage: false
-                }
-            });
-            console.log('📺 Ad provider: Monetag');
-            return 'monetag';
-        } catch (e) {
-            console.warn('Monetag error:', e);
-        }
+    if (typeof window.show_12265394 === 'function') providers.push('monetag');
+    if (window.adexiumWidget) providers.push('adexium');
+
+    if (!providers.length) {
+        console.warn('❌ No ad providers available');
+        return null;
     }
 
-    // RichAds
-    if (!useMonetag && window.TelegramAdsController) {
-        try {
-            const ctrl = window.TelegramAdsController;
-            if (typeof ctrl.show === 'function')       { ctrl.show();       console.log('📺 Ad provider: RichAds (show)');    return 'richads'; }
-            if (typeof ctrl.showAd === 'function')     { ctrl.showAd();     console.log('📺 Ad provider: RichAds (showAd)');  return 'richads'; }
-            if (typeof ctrl.display === 'function')    { ctrl.display();    console.log('📺 Ad provider: RichAds (display)'); return 'richads'; }
-            if (typeof ctrl.open === 'function')       { ctrl.open();       console.log('📺 Ad provider: RichAds (open)');    return 'richads'; }
-            console.warn('RichAds: no show method found');
-        } catch (e) {
-            console.warn('RichAds error:', e);
-        }
-    }
+    const provider = providers[Math.floor(Math.random() * providers.length)];
 
-    // Fallback to Monetag if RichAds failed
-    if (typeof window.show_12265394 === 'function') {
-        try {
-            window.show_12265394({
-                type: 'inApp',
-                inAppSettings: {
-                    frequency: 2,
-                    capping: 0.1,
-                    interval: 30,
-                    timeout: 5,
-                    everyPage: false
-                }
-            });
-            console.log('📺 Ad provider: Monetag (fallback)');
-            return 'monetag';
-        } catch (e) {
-            console.warn('Monetag fallback error:', e);
-        }
+    if (provider === 'monetag') {
+        if (showMonetagAd()) return 'monetag';
+        // Fallback to Adexium
+        if (showAdexiumAd()) return 'adexium';
+    } else {
+        if (showAdexiumAd()) return 'adexium';
+        // Fallback to Monetag
+        if (showMonetagAd()) return 'monetag';
     }
 
     return null;
@@ -683,18 +697,21 @@ async function watchAd() {
 
     try {
         const start = await apiRequest('/ads/start', { method: 'POST', body: { token: adsState.token || null } });
-        if (!start.success) { showToast(start.error || 'Failed to start ad', 'error'); return; }
+        if (!start.success) {
+            showToast(start.error || 'Failed to start ad', 'error');
+            return;
+        }
 
         const { ymid, token } = start;
 
-        // Trigger ad SDK (random provider)
         const provider = tryTriggerAdSDK();
         if (!provider) {
             showToast('No ad available. Try again.', 'error');
             return;
         }
 
-        // Wait for minimum gap (server enforces too)
+        showToast('🎬 Watching ad...', 'info', 2000);
+
         const gapMs = (CONFIG.ADS_MIN_GAP_SEC || 15) * 1000;
         await sleep(gapMs);
 
@@ -782,7 +799,6 @@ async function taskAction(taskId, action) {
         return;
     }
 
-    // Verify
     const res = await apiRequest('/tasks/verify', { method: 'POST', body: { taskId } });
     if (res.success) {
         currentUser = res.user;
@@ -822,7 +838,7 @@ async function checkin() {
 }
 
 // ----------------------------------------------------------------------------
-// 13. REFERRAL
+// 13. REFERRAL — Mini App direct link
 // ----------------------------------------------------------------------------
 function renderReferral() {
     if (!currentUser) return;
@@ -860,7 +876,7 @@ function renderReferral() {
         }).join('');
     }
 
-    // Referral link — always fill from best available source
+    // Referral link — Mini App direct format
     const linkInput = $('referralLinkInput');
     if (linkInput) {
         const tgUser = tg?.initDataUnsafe?.user;
@@ -871,7 +887,7 @@ function renderReferral() {
             null;
 
         if (uid) {
-            linkInput.value = `https://t.me/${CONFIG.botUsername}?start=${uid}`;
+            linkInput.value = buildReferralLink(uid);
             if (!userId) userId = uid;
         } else if (!linkInput.value || linkInput.value === 'Loading…') {
             linkInput.value = 'Open inside Telegram to generate link';
@@ -916,7 +932,7 @@ async function claimMilestone(count) {
 async function copyReferral() {
     const uid = currentUser?.userId || userId;
     if (!uid) return showToast('Cannot build link', 'error');
-    const link = `https://t.me/${CONFIG.botUsername}?start=${uid}`;
+    const link = buildReferralLink(uid);
     const ok = await copyToClipboard(link);
     vibrate(ok ? 'success' : 'error');
     showToast(ok ? 'Link copied!' : 'Copy failed', ok ? 'success' : 'error');
@@ -925,7 +941,7 @@ async function copyReferral() {
 function shareReferral() {
     const uid = currentUser?.userId || userId;
     if (!uid) return showToast('Cannot build link', 'error');
-    const link = `https://t.me/${CONFIG.botUsername}?start=${uid}`;
+    const link = buildReferralLink(uid);
     const text = `🔥 Join Groyper Mine and start mining $${CONFIG.tokenSymbol}!`;
     const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
     try {
