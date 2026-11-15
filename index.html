@@ -14,24 +14,24 @@
     <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
 
     <!-- Ad Networks -->
+    <!-- Monetag -->
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
-    <script src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"></script>
+
+    <!-- Adexium -->
+    <script src="https://cdn.tgads.space/assets/js/adexium-widget.min.js"></script>
     <script>
-        // RichAds controller — must be initialized AFTER tg-ob.js loads
-        try {
-            if (typeof TelegramAdsController !== 'undefined') {
-                window.TelegramAdsController = new TelegramAdsController();
-                window.TelegramAdsController.initialize({
-                    pubId: "1009657",
-                    appId: "7207",
+        document.addEventListener('DOMContentLoaded', () => {
+            try {
+                window.adexiumWidget = new AdexiumWidget({
+                    wid: 'd9e2de77-513f-469f-9a05-eb03d0069f8e',
+                    adFormat: 'interstitial'
                 });
-                console.log('✅ RichAds initialized');
-            } else {
-                console.warn('⚠️ TelegramAdsController not available');
+                // ❌ NO autoMode() — only shown on user click
+                console.log('✅ Adexium initialized');
+            } catch (e) {
+                console.warn('⚠️ Adexium init failed:', e);
             }
-        } catch (e) {
-            console.warn('⚠️ RichAds init failed:', e);
-        }
+        });
     </script>
 
     <!-- Fonts -->
