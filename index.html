@@ -9,7 +9,6 @@
     <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
-    
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
     <script src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"></script>
 
@@ -20,33 +19,26 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
     <canvas id="embersCanvas"></canvas>
 
-    <!-- Onboarding Screen -->
+    <!-- ONBOARDING -->
     <div id="onboardingScreen" class="screen active">
         <div class="onboarding-content">
-            <img src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553" alt="GROYP Logo" class="onboarding-logo">
+            <img src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553" alt="GROYP" class="onboarding-logo">
             <h1 class="onboarding-title">Ignite Your Fire</h1>
             <p class="onboarding-subtitle">Mine GROYP, Build Your Vault</p>
-            
             <div class="onboarding-features">
                 <div class="feature-item"><i class="fas fa-fire"></i> 24/7 Mining</div>
                 <div class="feature-item"><i class="fas fa-gift"></i> Daily Rewards</div>
                 <div class="feature-item"><i class="fas fa-users"></i> Invite & Earn</div>
             </div>
-            
-            <!-- TonConnect Placeholder -->
-            <div id="ton-connect-btn" style="display: flex; justify-content: center; margin-top: 24px; min-height: 50px;"></div>
-            
+            <div id="ton-connect-btn" style="display:flex;justify-content:center;margin-top:24px;min-height:50px;"></div>
             <p class="onboarding-note">Connect your wallet to start mining</p>
         </div>
     </div>
 
-    <!-- Main App -->
-    <div id="mainApp" class="app-container" style="display: none;">
-        
-        <!-- Header -->
+    <!-- MAIN APP -->
+    <div id="mainApp" class="app-container" style="display:none;">
         <header class="app-header">
             <div class="header-user">
                 <img id="userAvatar" src="" alt="User" class="user-avatar">
@@ -62,13 +54,20 @@
             </div>
         </header>
 
-        <!-- Home Page -->
+        <!-- HOME -->
         <section id="pageHome" class="page active">
             <div class="card mining-card">
                 <div class="mining-ring-container">
                     <svg class="mining-ring" viewBox="0 0 200 200">
+                        <defs>
+                            <linearGradient id="fireGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#FF4D00"/>
+                                <stop offset="50%" stop-color="#FF9500"/>
+                                <stop offset="100%" stop-color="#FFD84D"/>
+                            </linearGradient>
+                        </defs>
                         <circle class="ring-bg" cx="100" cy="100" r="90"></circle>
-                        <circle class="ring-progress" cx="100" cy="100" r="90" id="ringProgress"></circle>
+                        <circle class="ring-progress" cx="100" cy="100" r="90" id="ringProgress" stroke="url(#fireGradient)"></circle>
                     </svg>
                     <div class="mining-core-content">
                         <span class="core-label">MINED</span>
@@ -125,7 +124,7 @@
             </div>
         </section>
 
-        <!-- Earn Page -->
+        <!-- EARN -->
         <section id="pageEarn" class="page">
             <div class="card ads-card">
                 <h3 class="card-title"><i class="fas fa-play-circle"></i> Watch & Earn</h3>
@@ -137,17 +136,16 @@
                     </div>
                 </div>
                 <button id="watchAdBtn" class="btn-primary"><i class="fas fa-play"></i> WATCH AD (+2 GROYP)</button>
-                <button id="claimAdsBtn" class="btn-claim" style="display: none;"><i class="fas fa-check"></i> CLAIM 20 GROYP</button>
-                <div id="adsCooldown" class="ads-cooldown" style="display: none;">Next batch in: <span id="adsTimer">06:00:00</span></div>
+                <button id="claimAdsBtn" class="btn-claim" style="display:none;"><i class="fas fa-check"></i> CLAIM 20 GROYP</button>
+                <div id="adsCooldown" class="ads-cooldown" style="display:none;">Next batch in: <span id="adsTimer">06:00:00</span></div>
             </div>
-
             <div class="card tasks-card">
                 <h3 class="card-title"><i class="fas fa-tasks"></i> Daily Tasks</h3>
                 <div class="task-list" id="taskList"></div>
             </div>
         </section>
 
-        <!-- Referral Page -->
+        <!-- REFERRAL -->
         <section id="pageReferral" class="page">
             <div class="card invite-card">
                 <div class="invite-glow"></div>
@@ -172,7 +170,7 @@
             </div>
         </section>
 
-        <!-- Wallet Page -->
+        <!-- WALLET -->
         <section id="pageWallet" class="page">
             <div class="card user-card">
                 <img id="walletAvatar" src="" alt="User" class="wallet-avatar">
@@ -185,7 +183,6 @@
                     <div class="wallet-stat highlight"><span class="wallet-stat-label">AVAILABLE TO WITHDRAW</span><span class="wallet-stat-value" id="availableToWithdraw">0 GROYP</span></div>
                 </div>
             </div>
-
             <div class="card withdraw-card">
                 <h3 class="card-title"><i class="fas fa-paper-plane"></i> Withdraw</h3>
                 <div class="input-group">
@@ -196,25 +193,22 @@
                 <div class="wallet-address-display"><i class="fas fa-wallet"></i> <span id="withdrawWalletAddress">UQ...x9aF</span></div>
                 <button id="withdrawBtn" class="btn-primary btn-gold"><i class="fas fa-lock"></i> WITHDRAW</button>
             </div>
-
             <div class="card history-card">
                 <h3 class="card-title"><i class="fas fa-history"></i> Withdrawal History</h3>
                 <div id="withdrawHistory" class="history-list"><div class="empty-state">No withdrawals yet</div></div>
             </div>
         </section>
 
-        <!-- Bottom Nav -->
+        <!-- BOTTOM NAV -->
         <nav class="bottom-nav">
             <button class="nav-item active" data-page="home"><i class="fas fa-home"></i><span>Home</span></button>
             <button class="nav-item" data-page="earn"><i class="fas fa-gift"></i><span>Earn</span></button>
             <button class="nav-item" data-page="referral"><i class="fas fa-users"></i><span>Invite</span></button>
             <button class="nav-item" data-page="wallet"><i class="fas fa-wallet"></i><span>Wallet</span></button>
         </nav>
-
     </div>
 
     <div id="toast" class="toast hidden"><span id="toastMessage">Message</span></div>
-
     <script src="app.js" defer></script>
 </body>
 </html>
