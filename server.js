@@ -1,1480 +1,1107 @@
 // ============================================================================
-// GROYPER MINE - SERVER v3.0 (Clean, Complete, Error-Free)
-// Express + Telegraf (polling) + Firebase Admin
+// GROYPER MINE - EMBER VAULT v3.0 (Final, Complete, Production-Ready)
+// Fully compatible with server.js v3.0
 // ============================================================================
-'use strict';
 
-const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const admin = require('firebase-admin');
-const { Telegraf, Markup } = require('telegraf');
-
-// ============================================================================
-// 1. ENV & SECRETS
-// ============================================================================
-const log = (...a) => console.log(new Date().toISOString(), ...a);
-
-const readSecret = (file) => {
-    try { return fs.readFileSync('/etc/secrets/' + file, 'utf8').trim(); }
-    catch { return null; }
-};
-
-const PORT = process.env.PORT || 3000;
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const OWNER_WALLET = process.env.OWNER_WALLET;
-const APP_URL = (process.env.APP_URL || '').replace(/\/$/, '');
-const TON_API_KEY = process.env.TON_API_KEY || readSecret('ton-api-key.txt') || '';
-const CRON_KEY = process.env.CRON_KEY || '';
-
-let ADMIN_ID = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : null;
-if (!ADMIN_ID) {
-    try { ADMIN_ID = String(JSON.parse(readSecret('admin-config.json')).admin_id); } catch {}
-}
-
-if (!BOT_TOKEN || !OWNER_WALLET || !APP_URL) {
-    console.error('❌ Missing BOT_TOKEN / OWNER_WALLET / APP_URL');
-    process.exit(1);
+const tg = window.Telegram?.WebApp;
+if (tg) {
+    tg.ready();
+    tg.expand();
+    try { tg.setHeaderColor('#07080D'); tg.setBackgroundColor('#07080D'); } catch {}
+    try { tg.disableVerticalSwipes?.(); } catch {}
 }
 
 // ============================================================================
-// 2. FIREBASE
+// CONFIG (client-side defaults — server overrides via /api/init)
 // ============================================================================
-const saKey = readSecret('firebase-admin-key.json');
-if (!saKey) {
-    console.error('❌ Missing /etc/secrets/firebase-admin-key.json');
-    process.exit(1);
-}
-
-if (!admin.apps.length) {
-    admin.initializeApp({ credential: admin.credential.cert(JSON.parse(saKey)) });
-}
-const db = admin.firestore();
-const FV = admin.firestore.FieldValue;
-const inc = (n) => FV.increment(n);
-const arrayUnion = (v) => FV.arrayUnion(v);
-const userRef = (id) => db.collection('users').doc(String(id));
-
-log('🔥 Firebase initialized');
-
-// ============================================================================
-// 3. CONFIG (DEFAULTS)
-// ============================================================================
-const DEFAULTS = {
-    symbol: 'GROYP',
+const CONFIG = {
+    tokenSymbol: 'GROYP',
     tokenAddress: 'EQBvcsqG7hqsw-HQ8bemIYrO8I_GLDTSbNiro4WOC7jAG_CH',
-    channelUrl: 'https://t.me/GroyperMine',
-    groupUrl: 'https://t.me/communityGroyper',
-    dexUrl: 'https://dedust.io/swap/TON/EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     botUsername: 'GroyperMinebot',
-    miningReward: 20,
-    cooldownMs: 6 * 3600e3,
-    adsPerBatch: 10,
-    adsReward: 20,
-    adsCooldownMs: 6 * 3600e3,
-    adsMinGapSec: 15,
-    minWithdraw: 2000,
-    feeTon: 0.1,
-    minAccountAgeHours: 12,
-    maxPendingWd: 3,
-    referralReward: 75,
-    milestones: [
+    MINING_REWARD: 20,
+    MINING_COOLDOWN_MS: 6 * 60 * 60 * 1000,
+    REWARD_PER_AD: 2,
+    MAX_ADS_PER_BATCH: 10,
+    ADS_BATCH_REWARD: 20,
+    ADS_COOLDOWN_MS: 6 * 60 * 60 * 1000,
+    REFERRAL_REWARD: 75,
+    MILESTONES: [
         { count: 50, reward: 1000 },
         { count: 100, reward: 2500 },
         { count: 250, reward: 5000 },
         { count: 500, reward: 10000 },
         { count: 1000, reward: 25000 }
     ],
-    boosts: {
-        bronze: { price: 1, mult: 2, name: 'SPARK' },
-        silver: { price: 2.5, mult: 5, name: 'BLAZE' },
-        gold: { price: 10, mult: 12, name: 'INFERNO' }
-    },
-    boostDays: 30,
-    checkinRewards: [5, 10, 15, 20, 30, 40, 60],
-    dailyCap: 0,
-    miningEnabled: true,
-    withdrawEnabled: true,
-    maintenance: false,
-    banner: ''
-};
-
-const memCache = new Map();
-const cached = async (key, ttl, fn) => {
-    const c = memCache.get(key);
-    if (c && c.exp > Date.now()) return c.v;
-    const v = await fn();
-    memCache.set(key, { v, exp: Date.now() + ttl });
-    return v;
-};
-const bust = (k) => memCache.delete(k);
-
-const getConfig = () => cached('config', 60000, async () => {
-    const s = await db.doc('settings/config').get();
-    return { ...DEFAULTS, ...(s.exists ? s.data() : {}) };
-});
-
-const setConfig = async (patch) => {
-    await db.doc('settings/config').set(patch, { merge: true });
-    bust('config');
-};
-
-const publicConfig = (c) => ({
-    symbol: c.symbol,
-    bot: c.botUsername,
-    tokenAddress: c.tokenAddress,
-    tokenSymbol: c.symbol,
-    miningReward: c.miningReward,
-    cooldownMs: c.cooldownMs,
-    adsPerBatch: c.adsPerBatch,
-    adsReward: c.adsReward,
-    adsCooldownMs: c.adsCooldownMs,
-    minWithdraw: c.minWithdraw,
-    feeTon: c.feeTon,
-    referralReward: c.referralReward,
-    milestones: c.milestones,
-    boosts: c.boosts
-});
-
-// ============================================================================
-// 4. STATS (batched every 30s)
-// ============================================================================
-const pend = {};
-const statInc = (k, n = 1) => { pend[k] = (pend[k] || 0) + n; };
-let daily = { day: '', amount: 0, unflushed: 0 };
-
-const dayKey = () => new Date().toISOString().slice(0, 10);
-
-async function flushStats() {
-    const keys = Object.keys(pend);
-    try {
-        if (keys.length) {
-            const upd = {};
-            for (const k of keys) { upd[k] = inc(pend[k]); delete pend[k]; }
-            await db.doc('stats/global').set(upd, { merge: true });
-        }
-        if (daily.unflushed) {
-            const n = daily.unflushed;
-            daily.unflushed = 0;
-            await db.doc('stats_daily/' + daily.day).set({ amount: inc(n) }, { merge: true });
-        }
-    } catch (e) { log('flushStats:', e.message); }
-}
-
-setInterval(flushStats, 30000);
-
-async function dailyLoad() {
-    const d = dayKey();
-    if (daily.day === d) return;
-    if (daily.unflushed) await flushStats();
-    const s = await db.doc('stats_daily/' + d).get();
-    daily = { day: d, amount: s.exists ? s.data().amount || 0 : 0, unflushed: 0 };
-}
-
-const capCheck = (cfg, n) => {
-    if (cfg.dailyCap > 0 && daily.amount + n > cfg.dailyCap) {
-        throw new AppErr('Daily distribution limit reached. Try again tomorrow.');
+    MIN_WITHDRAW: 2000,
+    WITHDRAW_FEE_TON: 0.1,
+    BOOSTS: {
+        bronze: { price: 1, multiplier: 2, name: 'SPARK', icon: '🥉' },
+        silver: { price: 2.5, multiplier: 5, name: 'BLAZE', icon: '🥈' },
+        gold: { price: 10, multiplier: 12, name: 'INFERNO', icon: '🥇' }
     }
 };
-const capCommit = (n) => {
-    daily.amount += n;
-    daily.unflushed += n;
-    statInc('distributed', n);
-};
 
 // ============================================================================
-// 5. TASKS
+// STATE
 // ============================================================================
-const DEFAULT_TASKS = [
-    { id: 'join_channel', name: 'Join Telegram Channel', url: DEFAULTS.channelUrl, reward: 50, iconClass: 'fab fa-telegram', verify: 'chat', chat: '@GroyperMine' },
-    { id: 'join_group', name: 'Join Community Group', url: DEFAULTS.groupUrl, reward: 50, iconClass: 'fas fa-users', verify: 'chat', chat: '@communityGroyper' },
-    { id: 'follow_x', name: 'Follow on X (Twitter)', url: 'https://x.com/GroyperMine', reward: 50, iconClass: 'fab fa-twitter', verify: 'delay', delaySec: 20 }
-];
+let currentUser = null;
+let userId = null;
+let tasks = [];
+let tonConnected = false;
+let tonWalletAddress = null;
+let isClaimingMining = false;
+let isClaimingAds = false;
+let isProcessingWithdraw = false;
+let adSequenceActive = false;
+let miningTimer = null;
+let livePriceData = { price: 0, change24h: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
+let adsState = { watched: 0, accumulated: 0, token: null };
+let taskStartedAt = {};
+let booted = false;
+let serverOffset = 0;
 
-const getTasks = () => cached('tasks', 300000, async () => {
-    const s = await db.doc('settings/tasks').get();
-    return s.exists && Array.isArray(s.data().list) ? s.data().list : DEFAULT_TASKS;
-});
-
-const saveTasks = async (list) => {
-    await db.doc('settings/tasks').set({ list });
-    bust('tasks');
-};
-
-// ============================================================================
-// 6. PRICE (cached 60s, source: DexScreener → CoinGecko fallback)
-// ============================================================================
-let lastPrice = { usd: 0, change: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
-
-const getPrice = () => cached('price', 60000, async () => {
-    // Try DexScreener first
-    try {
-        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${DEFAULTS.tokenAddress}`, {
-            signal: AbortSignal.timeout(8000)
-        });
-        const j = await r.json();
-        const p = (j.pairs || []).sort((a, b) => (+b.liquidity?.usd || 0) - (+a.liquidity?.usd || 0))[0];
-        if (p) {
-            lastPrice = {
-                usd: +p.priceUsd || 0,
-                price: +p.priceUsd || 0,
-                change: +p.priceChange?.h24 || 0,
-                change24h: +p.priceChange?.h24 || 0,
-                mcap: +p.marketCap || 0,
-                fdv: +p.fdv || 0,
-                liq: +p.liquidity?.usd || 0,
-                vol: +p.volume?.h24 || 0
-            };
-            return lastPrice;
-        }
-    } catch (e) { log('DexScreener failed:', e.message); }
-
-    // Fallback: CoinGecko
-    try {
-        const r = await fetch('https://api.coingecko.com/api/v3/coins/groyper-3?localization=false&tickers=false&community_data=false&developer_data=false', {
-            signal: AbortSignal.timeout(8000)
-        });
-        const j = await r.json();
-        if (j?.market_data) {
-            const md = j.market_data;
-            lastPrice = {
-                usd: md.current_price?.usd || 0,
-                price: md.current_price?.usd || 0,
-                change: md.price_change_percentage_24h || 0,
-                change24h: md.price_change_percentage_24h || 0,
-                mcap: md.market_cap?.usd || 0,
-                fdv: md.fully_diluted_valuation?.usd || 0,
-                liq: md.total_volume?.usd || 0,
-                vol: md.total_volume?.usd || 0
-            };
-        }
-    } catch (e) { log('CoinGecko failed:', e.message); }
-
-    return lastPrice;
-});
+const now = () => Date.now() + serverOffset;
+const $ = id => document.getElementById(id);
 
 // ============================================================================
-// 7. HELPERS
+// UTILITIES
 // ============================================================================
-class AppErr extends Error {
-    constructor(m, code = 400) { super(m); this.code = code; }
+function showToast(msg, type = 'info', dur = 3000) {
+    const t = $('toast'), m = $('toastMessage');
+    if (!t || !m) return;
+    m.textContent = msg;
+    t.classList.remove('hidden');
+    t.style.borderColor = type === 'success' ? 'var(--ok)' : type === 'error' ? 'var(--bad)' : 'var(--line-2)';
+    clearTimeout(t._t);
+    t._t = setTimeout(() => t.classList.add('hidden'), dur);
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-
-const safeEq = (a, b) => {
-    a = Buffer.from(String(a));
-    b = Buffer.from(String(b));
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-};
-
-const h = (fn) => (req, res) => fn(req, res).catch((e) => {
-    if (e instanceof AppErr) return res.status(e.code).json({ success: false, error: e.message });
-    log('ERR', req.method, req.path, e.message);
-    res.status(500).json({ success: false, error: 'Server error' });
-});
-
-// ============================================================================
-// 8. USER MODEL
-// ============================================================================
-const PUB = [
-    'userId', 'username', 'firstName', 'wallet',
-    'balance', 'totalWithdrawn', 'totalEarned',
-    'lastMiningClaim', 'boostMultiplier', 'boostType', 'boostExpiresAt',
-    'adsCooldownUntil', 'adsWatched', 'completedTasks',
-    'activeReferrals', 'inactiveReferrals', 'claimedMilestones',
-    'streak', 'lastCheckinDay', 'isActive', 'withdrawFeePaid', 'createdAt'
-];
-
-const pub = (u) => {
-    const o = {};
-    for (const k of PUB) if (u[k] !== undefined) o[k] = u[k];
-    return o;
-};
-
-const mult = (u, now = Date.now()) => (u.boostMultiplier > 1 && u.boostExpiresAt > now ? u.boostMultiplier : 1);
-
-const newUser = (tg) => ({
-    userId: tg.id,
-    username: tg.username || '',
-    firstName: tg.first_name || 'User',
-    wallet: '',
-    balance: 0,
-    totalWithdrawn: 0,
-    totalEarned: 0,
-    lastMiningClaim: 0,
-    boostMultiplier: 1,
-    boostType: null,
-    boostExpiresAt: 0,
-    adsCooldownUntil: 0,
-    adsWatched: 0,
-    completedTasks: [],
-    activeReferrals: 0,
-    inactiveReferrals: 0,
-    claimedMilestones: [],
-    referredBy: null,
-    isActive: false,
-    withdrawFeePaid: false,
-    pendingWd: 0,
-    streak: 0,
-    lastCheckinDay: 0,
-    banned: false,
-    createdAt: Date.now()
-});
-
-const notify = (id, text) => bot.telegram.sendMessage(id, text, { parse_mode: 'HTML' }).catch(() => {});
-
-// ============================================================================
-// 9. TELEGRAM AUTH
-// ============================================================================
-function verifyInitData(raw) {
-    if (!raw) return null;
-    const p = new URLSearchParams(raw);
-    const hash = p.get('hash');
-    if (!hash) return null;
-    p.delete('hash');
-    const str = [...p.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => k + '=' + v).join('\n');
-    const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-    if (!safeEq(crypto.createHmac('sha256', secret).update(str).digest('hex'), hash)) return null;
-    const ad = +p.get('auth_date');
-    if (!ad || Date.now() / 1000 - ad > 86400) return null;
-    let u;
-    try { u = JSON.parse(p.get('user') || 'null'); } catch { return null; }
-    if (!u?.id) return null;
-    return {
-        id: String(u.id),
-        username: u.username || '',
-        first_name: u.first_name || 'User',
-        lang: u.language_code,
-        start: p.get('start_param') || null
-    };
+function formatTimeLeft(ms) {
+    if (ms <= 0) return '00:00:00';
+    const s = Math.floor(ms / 1000);
+    return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60]
+        .map(x => String(x).padStart(2, '0')).join(':');
 }
 
-const rl = new Map();
-const rate = (id, max = 90) => {
-    const n = Date.now(), e = rl.get(id);
-    if (!e || e.r < n) { rl.set(id, { c: 1, r: n + 60000 }); return true; }
-    return ++e.c <= max;
-};
-
-setInterval(() => {
-    const n = Date.now();
-    for (const [k, v] of rl) if (v.r < n) rl.delete(k);
-}, 60000);
-
-async function authMw(req, res, next) {
-    const hdr = req.headers.authorization || '';
-    const tg = hdr.startsWith('tma ') ? verifyInitData(hdr.slice(4)) : null;
-    if (!tg) return res.status(401).json({ success: false, error: 'Unauthorized' });
-    if (!rate(tg.id)) return res.status(429).json({ success: false, error: 'Too many requests' });
-    req.tg = tg;
-    try {
-        const c = await getConfig();
-        if (c.maintenance && tg.id !== ADMIN_ID) {
-            return res.status(503).json({ success: false, error: 'Maintenance' });
-        }
-    } catch {}
-    next();
+function vibrate(type = 'light') {
+    if (!tg?.HapticFeedback) return;
+    if (type === 'light') tg.HapticFeedback.impactOccurred('light');
+    if (type === 'medium') tg.HapticFeedback.impactOccurred('medium');
+    if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
+    if (type === 'error') tg.HapticFeedback.notificationOccurred('error');
 }
 
 // ============================================================================
-// 10. TON PAYMENT VERIFICATION
+// API — Authorization via Telegram initData
 // ============================================================================
-async function tonGet(p) {
-    const r = await fetch('https://tonapi.io/v2' + p, {
-        headers: TON_API_KEY ? { Authorization: 'Bearer ' + TON_API_KEY } : {},
-        signal: AbortSignal.timeout(10000)
-    });
-    return { status: r.status, json: await r.json().catch(() => null) };
-}
-
-async function verifyPayment(it, boc) {
-    let hash;
+async function apiRequest(path, { method = 'GET', body } = {}) {
     try {
-        const r = await fetch('https://tonapi.io/v2/blockchain/message', {
-            method: 'POST',
+        const res = await fetch('/api' + path, {
+            method,
             headers: {
                 'Content-Type': 'application/json',
-                ...(TON_API_KEY ? { Authorization: 'Bearer ' + TON_API_KEY } : {})
+                Authorization: 'tma ' + (tg?.initData || '')
             },
-            body: JSON.stringify({ boc })
+            body: body ? JSON.stringify(body) : undefined
         });
-        const d = await r.json();
-        if (!d.hash) throw new Error('invalid_boc');
-        hash = d.hash;
-    } catch { throw new AppErr('Invalid transaction'); }
-
-    let tx = null;
-    for (let i = 0; i < 6 && !tx; i++) {
-        const r = await tonGet(`/blockchain/transactions/${hash}`).catch(() => ({}));
-        if (r.status === 200 && r.json?.hash) tx = r.json;
-        else await sleep(4000);
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 503) { showMaintenance(); return { success: false }; }
+        if (!res.ok || data.success === false) {
+            return { success: false, error: data.error || 'Request failed' };
+        }
+        return { success: true, ...data };
+    } catch (e) {
+        console.error('API Error:', e);
+        return { success: false, error: 'Network error' };
     }
+}
 
-    if (!tx) throw new AppErr('Transaction not confirmed yet. Please try again.');
-    if (tx.success === false || tx.aborted) throw new AppErr('Transaction failed');
-    if ((tx.utime || 0) * 1000 < it.createdAt - 60000) throw new AppErr('Transaction is older than request');
-    if (!tx.in_msg) throw new AppErr('No payment message found');
-
-    const value = parseFloat(tx.in_msg.value || 0) / 1e9;
-    const dest = (tx.in_msg.destination?.address || '').toString();
-
-    if (value + 1e-6 < it.amountTon * 0.98) {
-        throw new AppErr(`Amount mismatch: paid ${value.toFixed(4)} TON, expected ${it.amountTon} TON`);
-    }
-    if (dest && dest.toLowerCase() !== OWNER_WALLET.toLowerCase()) {
-        throw new AppErr('Payment destination mismatch');
-    }
-
-    return hash;
+function showMaintenance() {
+    document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#F4F5F9;font:600 18px Inter;text-align:center;padding:24px">🔧<br>Under maintenance</div>';
 }
 
 // ============================================================================
-// 11. TELEGRAM BOT
+// TON CONNECT — Initialize FIRST
 // ============================================================================
-const bot = new Telegraf(BOT_TOKEN);
-bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-
-// ---- /start ----
-bot.start(async (ctx) => {
+function initTonConnect() {
+    console.log('🔧 initTonConnect called');
+    console.log('TON_CONNECT_UI:', typeof window.TON_CONNECT_UI);
+    
+    if (typeof TON_CONNECT_UI === 'undefined') {
+        console.error('❌ TON_CONNECT_UI not loaded — check CDN');
+        return;
+    }
+    
+    const root = $('ton-connect-btn');
+    if (!root) {
+        console.error('❌ #ton-connect-btn not found');
+        return;
+    }
+    
     try {
-        const cfg = await getConfig();
-        const uid = String(ctx.from.id);
-        const name = ctx.from.first_name || 'Miner';
-        const startParam = ctx.startPayload;
-
-        const existing = await userRef(uid).get();
-        if (!existing.exists) {
-            await userRef(uid).set(newUser(ctx.from));
-            statInc('users');
-        }
-
-        if (startParam && startParam !== uid && /^\d{5,15}$/.test(startParam)) {
-            const refSnap = await userRef(startParam).get();
-            if (refSnap.exists) {
-                const refsSnap = await userRef(startParam).collection('referrals').doc(uid).get();
-                if (!refsSnap.exists) {
-                    await userRef(startParam).collection('referrals').doc(uid).set({
-                        username: ctx.from.username || ctx.from.first_name,
-                        active: false,
-                        createdAt: Date.now()
-                    });
-                    await userRef(startParam).update({ inactiveReferrals: inc(1) });
+        window.tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
+            manifestUrl: location.origin + '/tonconnect-manifest.json',
+            buttonRootId: 'ton-connect-btn',
+            language: 'en'
+        });
+        console.log('✅ TonConnectUI initialized');
+        
+        window.tonConnectUI.onStatusChange(async wallet => {
+            console.log('🔗 Wallet:', wallet?.account?.address);
+            
+            if (!wallet) {
+                tonConnected = false;
+                tonWalletAddress = null;
+                return;
+            }
+            
+            // Convert raw to friendly (UQ...)
+            let friendly = wallet.account.address;
+            try {
+                friendly = TON_CONNECT_UI.toUserFriendlyAddress(wallet.account.address, false);
+            } catch (e) {
+                console.warn('Address conversion failed, using raw');
+            }
+            
+            tonConnected = true;
+            tonWalletAddress = friendly;
+            
+            // If we're already in app and wallet matches, just update header
+            if (booted && currentUser && currentUser.wallet === friendly) {
+                updateHeaderWallet();
+                return;
+            }
+            
+            // Register via secure endpoint
+            const res = await apiRequest('/register', {
+                method: 'POST',
+                body: {
+                    wallet: friendly,
+                    startParam: tg?.initDataUnsafe?.start_param || null
                 }
+            });
+            
+            if (res.success) {
+                currentUser = res.user;
+                enterApp();
+            } else {
+                showToast(res.error || 'Registration failed', 'error');
+            }
+        });
+    } catch (e) {
+        console.error('❌ TonConnectUI init error:', e);
+    }
+}
+
+// ============================================================================
+// SERVER CONFIG MAPPING (fixes lowercase vs UPPERCASE mismatch)
+// ============================================================================
+function applyServerConfig(srv) {
+    if (!srv) return;
+    
+    // Strings
+    if (srv.symbol) CONFIG.tokenSymbol = srv.symbol;
+    if (srv.tokenSymbol) CONFIG.tokenSymbol = srv.tokenSymbol;
+    if (srv.bot) CONFIG.botUsername = srv.bot;
+    if (srv.botUsername) CONFIG.botUsername = srv.botUsername;
+    if (srv.tokenAddress) CONFIG.tokenAddress = srv.tokenAddress;
+    
+    // Numbers
+    if (typeof srv.miningReward === 'number') CONFIG.MINING_REWARD = srv.miningReward;
+    if (typeof srv.cooldownMs === 'number') CONFIG.MINING_COOLDOWN_MS = srv.cooldownMs;
+    if (typeof srv.adsPerBatch === 'number') CONFIG.MAX_ADS_PER_BATCH = srv.adsPerBatch;
+    if (typeof srv.adsReward === 'number') CONFIG.ADS_BATCH_REWARD = srv.adsReward;
+    if (typeof srv.adsCooldownMs === 'number') CONFIG.ADS_COOLDOWN_MS = srv.adsCooldownMs;
+    if (typeof srv.minWithdraw === 'number') CONFIG.MIN_WITHDRAW = srv.minWithdraw;
+    if (typeof srv.feeTon === 'number') CONFIG.WITHDRAW_FEE_TON = srv.feeTon;
+    if (typeof srv.referralReward === 'number') CONFIG.REFERRAL_REWARD = srv.referralReward;
+    
+    // Derived
+    if (CONFIG.MAX_ADS_PER_BATCH > 0) {
+        CONFIG.REWARD_PER_AD = CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH;
+    }
+    
+    // Milestones
+    if (Array.isArray(srv.milestones) && srv.milestones.length) {
+        CONFIG.MILESTONES = srv.milestones;
+    }
+    
+    // Boosts (map mult → multiplier, preserve icon)
+    if (srv.boosts && typeof srv.boosts === 'object') {
+        const next = {};
+        for (const [k, v] of Object.entries(srv.boosts)) {
+            next[k] = {
+                price: Number(v.price) || 0,
+                multiplier: Number(v.mult ?? v.multiplier) || 1,
+                name: v.name || k.toUpperCase(),
+                icon: CONFIG.BOOSTS[k]?.icon || '🔥'
+            };
+        }
+        CONFIG.BOOSTS = next;
+    }
+    
+    console.log('✅ Server config applied:', CONFIG);
+}
+
+// ============================================================================
+// USER / BOOT
+// ============================================================================
+async function fetchUserData() {
+    const res = await apiRequest('/init');
+    if (!res.success) return false;
+    
+    applyServerConfig(res.config);
+    if (res.serverTime) serverOffset = res.serverTime - Date.now();
+    if (res.tasks) tasks = res.tasks;
+    if (res.price) livePriceData = res.price;
+    if (res.user) currentUser = res.user;
+    
+    return true;
+}
+
+async function boot(silent = false) {
+    console.log('=== boot called ===');
+    const res = await apiRequest('/init');
+    console.log('📡 /api/init:', res.success ? 'OK' : res.error);
+    
+    if (!res.success) {
+        if (!silent) showToast(res.error || 'Connection failed', 'error');
+        return;
+    }
+    
+    // Map server lowercase config to our UPPERCASE constants
+    applyServerConfig(res.config);
+    
+    serverOffset = (res.serverTime || Date.now()) - Date.now();
+    tasks = res.tasks || [];
+    if (res.price) livePriceData = res.price;
+    
+    if (res.banner) showToast(res.banner, 'info', 5000);
+    
+    if (res.user && res.user.wallet) {
+        currentUser = res.user;
+        tonWalletAddress = res.user.wallet;
+        tonConnected = true;
+        enterApp();
+    } else {
+        showOnboarding();
+    }
+}
+
+function showOnboarding() {
+    $('onboardingScreen')?.classList.add('active');
+    const m = $('mainApp');
+    if (m) m.style.display = 'none';
+}
+
+function enterApp() {
+    console.log('=== enterApp called ===');
+    $('onboardingScreen')?.classList.remove('active');
+    const m = $('mainApp');
+    if (m) m.style.display = 'block';
+    booted = true;
+    
+    const u = tg?.initDataUnsafe?.user || {};
+    if ($('userAvatar')) $('userAvatar').src = u.photo_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.first_name || 'U') + '&background=FF4D00&color=fff';
+    if ($('userName')) $('userName').textContent = u.first_name || currentUser?.firstName || 'User';
+    if ($('userHandle')) $('userHandle').textContent = '@' + (u.username || currentUser?.username || 'user');
+    
+    renderAll();
+    
+    if (miningTimer) clearInterval(miningTimer);
+    miningTimer = setInterval(() => {
+        if (document.hidden) return;
+        renderMining();
+        renderAds();
+        renderCheckin();
+    }, 1000);
+    
+    fetchTokenPrice();
+    console.log('✅ enterApp complete');
+}
+
+// ============================================================================
+// TOKEN PRICE (server-first, then DexScreener fallback)
+// ============================================================================
+let lastPriceFetch = 0;
+
+async function fetchTokenPrice(force = false) {
+    if (!force && Date.now() - lastPriceFetch < 60000) {
+        renderToken();
+        return;
+    }
+    
+    // 1) Try server cache first (cheap, no CORS, no rate limits)
+    try {
+        const res = await apiRequest('/price');
+        if (res.success && res.price) {
+            const p = res.price;
+            const priceVal = p.usd || p.price || 0;
+            if (priceVal > 0) {
+                livePriceData = {
+                    price: priceVal,
+                    change24h: p.change24h ?? p.change ?? 0,
+                    mcap: p.mcap || 0,
+                    fdv: p.fdv || 0,
+                    liq: p.liq || 0,
+                    vol: p.vol || 0
+                };
+                lastPriceFetch = Date.now();
+                renderToken();
+                updateHeaderWallet();
+                console.log('✅ Price from server:', livePriceData);
+                return;
             }
         }
-
-        const welcome = `
-🔥 <b>Welcome to Groyper Mine, ${esc(name)}!</b> 🔥
-
-The <b>#1 Mining App</b> for <b>$${cfg.symbol}</b> on TON Blockchain.
-
-💰 <b>How It Works:</b>
-├ ⛏️ <b>Mining:</b> Claim <b>${cfg.miningReward} $${cfg.symbol}</b> every 6 hours.
-├ 🎬 <b>Ads:</b> Watch 10 ads → earn <b>${cfg.adsReward} $${cfg.symbol}</b>.
-├ ✅ <b>Tasks:</b> Complete simple tasks for <b>50 $${cfg.symbol}</b> each.
-└ 👥 <b>Referrals:</b> Earn <b>${cfg.referralReward} $${cfg.symbol}</b> per active friend.
-
-📊 <b>Token Info:</b>
-The <b>$${cfg.symbol}</b> token is <b>live & tradable</b> on multiple DEXs (DeDust, STON.fi, etc.).
-
-🎁 <b>Daily Check-in:</b> Up to <b>${cfg.checkinRewards[cfg.checkinRewards.length - 1]} $${cfg.symbol}</b> streak bonus!
-
-🚀 <b>Start mining now:</b>
-        `;
-
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.webApp('⛏️ Launch App', APP_URL)],
-            [
-                Markup.button.url('📢 Channel', cfg.channelUrl),
-                Markup.button.url('💬 Community', cfg.groupUrl)
-            ],
-            [Markup.button.url('💱 Trade on DeDust', cfg.dexUrl)]
-        ]);
-
-        await ctx.replyWithHTML(welcome, keyboard);
     } catch (e) {
-        log('Start error:', e.message);
-        await ctx.reply('⚠️ Something went wrong. Please try again.');
+        console.warn('Server price failed, trying DexScreener:', e);
     }
-});
+    
+    // 2) Fallback: fetch directly from DexScreener
+    try {
+        const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${CONFIG.tokenAddress}`);
+        const data = await res.json();
+        if (data?.pairs?.length) {
+            const best = data.pairs.sort((a, b) =>
+                (parseFloat(b.liquidity?.usd) || 0) - (parseFloat(a.liquidity?.usd) || 0)
+            )[0];
+            livePriceData = {
+                price: parseFloat(best.priceUsd) || 0,
+                change24h: parseFloat(best.priceChange?.h24) || 0,
+                mcap: parseFloat(best.marketCap) || 0,
+                fdv: parseFloat(best.fdv) || 0,
+                liq: parseFloat(best.liquidity?.usd) || 0,
+                vol: parseFloat(best.volume?.h24) || 0
+            };
+            lastPriceFetch = Date.now();
+            renderToken();
+            updateHeaderWallet();
+            console.log('✅ Price from DexScreener:', livePriceData);
+        }
+    } catch (e) {
+        console.error('Price fetch error:', e);
+    }
+}
 
-// ---- ADMIN PANEL ----
-const isAdmin = (ctx) => String(ctx.from?.id) === ADMIN_ID;
-const sessions = new Map();
+function renderToken() {
+    const set = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+    set('tokenPrice', '$' + (livePriceData.price < 0.01 ? livePriceData.price.toFixed(8) : livePriceData.price.toFixed(4)));
+    set('tokenMarketCap', '$' + Math.round(livePriceData.mcap || 0).toLocaleString());
+    set('tokenFdv', '$' + Math.round(livePriceData.fdv || 0).toLocaleString());
+    set('tokenLiquidity', '$' + Math.round(livePriceData.liq || 0).toLocaleString());
+    set('tokenVolume', '$' + Math.round(livePriceData.vol || 0).toLocaleString());
+    
+    // Contract address uses innerHTML (contains icon)
+    const ca = $('contractAddress');
+    if (ca && CONFIG.tokenAddress) {
+        ca.innerHTML = `<i class="fas fa-file-contract"></i> ${CONFIG.tokenAddress.slice(0, 6)}…${CONFIG.tokenAddress.slice(-6)}`;
+    }
+    
+    const ch = $('tokenChange');
+    if (ch) {
+        const c = livePriceData.change24h || 0;
+        ch.textContent = (c >= 0 ? '+' : '') + c.toFixed(2) + '%';
+        ch.className = 'token-change ' + (c >= 0 ? 'positive' : 'negative');
+    }
+}
 
-async function buildAdminPanel() {
-    const c = await getConfig();
-    const s = (await db.doc('stats/global').get()).data() || {};
-    const t = (k, l) => Markup.button.callback(`${c[k] ? '🟢' : '🔴'} ${l}`, 'a:tg:' + k);
+// ============================================================================
+// HEADER
+// ============================================================================
+function updateHeaderWallet() {
+    if (currentUser) {
+        const bal = $('headerBalance');
+        const val = $('headerValue');
+        if (bal) bal.textContent = `${Math.floor(currentUser.balance || 0).toLocaleString()} ${CONFIG.tokenSymbol}`;
+        if (val) val.textContent = `≈ $${((currentUser.balance || 0) * (livePriceData.price || 0)).toFixed(2)}`;
+    }
+    if (tonWalletAddress) {
+        const addr = $('headerAddress');
+        if (addr) addr.innerHTML = `<i class="fas fa-wallet"></i> ${tonWalletAddress.slice(0, 4)}…${tonWalletAddress.slice(-4)}`;
+    }
+}
 
+// ============================================================================
+// MINING — live computation from time only (zero DB writes while mining)
+// ============================================================================
+function getMiningData() {
+    if (!currentUser) return { canClaim: false, remainingMs: 0, progress: 0, reward: 0, liveAccrued: 0 };
+    
+    const lastClaim = currentUser.lastMiningClaim || 0;
+    const elapsed = Math.max(0, now() - lastClaim);
+    const capped = Math.min(elapsed, CONFIG.MINING_COOLDOWN_MS);
+    const mult = getActiveMultiplier();
+    const fullReward = CONFIG.MINING_REWARD * mult;
+    
     return {
-        text: `👑 <b>Admin Panel</b>\n\n` +
-            `👥 Users: <b>${(s.users || 0).toLocaleString()}</b>\n` +
-            `⛏ Claims: <b>${(s.claims || 0).toLocaleString()}</b>\n` +
-            `💰 Distributed: <b>${(s.distributed || 0).toLocaleString()}</b>\n` +
-            `⏳ Pending: <b>${(s.pendingCount || 0).toLocaleString()}</b>\n` +
-            `📤 Paid out: <b>${(s.withdrawnTotal || 0).toLocaleString()}</b>\n` +
-            `💎 TON revenue: <b>${(s.tonRevenue || 0).toFixed(2)}</b>\n\n` +
-            `🟢 = ON. Maintenance blocks the app.`,
-        kb: Markup.inlineKeyboard([
-            [Markup.button.callback('📋 Pending withdrawals', 'a:wd')],
-            [Markup.button.callback('📝 Tasks', 'a:tasks'), Markup.button.callback('📢 Broadcast', 'a:bc')],
-            [t('miningEnabled', 'Mining'), t('withdrawEnabled', 'Withdraw')],
-            [t('maintenance', 'Maintenance')],
-            [Markup.button.callback('🔄 Refresh', 'a:home')]
-        ])
+        canClaim: elapsed >= CONFIG.MINING_COOLDOWN_MS,
+        remainingMs: Math.max(0, CONFIG.MINING_COOLDOWN_MS - capped),
+        progress: capped / CONFIG.MINING_COOLDOWN_MS,
+        reward: fullReward,
+        liveAccrued: fullReward * (capped / CONFIG.MINING_COOLDOWN_MS)
     };
 }
 
-bot.command('admin', async (ctx) => {
-    if (!isAdmin(ctx)) return ctx.reply('⛔ Access Denied');
-    const p = await buildAdminPanel();
-    ctx.replyWithHTML(p.text, p.kb);
-});
+function getActiveMultiplier() {
+    if (!currentUser) return 1;
+    const exp = currentUser.boostExpiresAt || 0;
+    if (exp && exp < now()) return 1;
+    return currentUser.boostMultiplier || 1;
+}
 
-bot.command('cancel', (ctx) => {
-    if (!isAdmin(ctx)) return;
-    sessions.delete(ADMIN_ID);
-    ctx.reply('Cancelled.');
-});
-
-bot.command('set', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const [, k, v] = ctx.message.text.split(/\s+/);
-    const keys = ['miningReward', 'adsReward', 'referralReward', 'minWithdraw', 'feeTon',
-        'minAccountAgeHours', 'maxPendingWd', 'dailyCap', 'adsMinGapSec', 'boostDays'];
-    if (!keys.includes(k) || isNaN(+v)) {
-        return ctx.reply('Usage: /set <key> <number>\nKeys: ' + keys.join(', '));
+function renderMining() {
+    if (!currentUser) return;
+    
+    const d = getMiningData();
+    const ring = $('ringProgress');
+    
+    if (ring) {
+        const c = 2 * Math.PI * 90;
+        ring.style.strokeDasharray = c;
+        ring.style.strokeDashoffset = c * (1 - d.progress);
+        ring.classList.remove('loading');
+        ring.classList.toggle('active', d.canClaim);
     }
-    await setConfig({ [k]: +v });
-    ctx.reply(`✅ ${k} = ${+v}`);
-});
+    
+    const amt = $('minedAmount');
+    if (amt) amt.textContent = d.canClaim ? Math.floor(d.reward).toLocaleString() : d.liveAccrued.toFixed(3);
+    
+    const usd = $('minedUsd');
+    if (usd) usd.textContent = `≈ $${(d.liveAccrued * (livePriceData.price || 0)).toFixed(2)}`;
+    
+    const timer = $('miningTimer');
+    if (timer) timer.textContent = d.canClaim ? 'READY' : formatTimeLeft(d.remainingMs);
+    
+    const power = $('hashPower');
+    if (power) power.textContent = `${getActiveMultiplier()}x`;
+    
+    const btn = $('claimMiningBtn');
+    if (btn) {
+        btn.disabled = !d.canClaim;
+        const label = $('claimLabel');
+        if (label) label.textContent = d.canClaim ? `CLAIM ${Math.floor(d.reward).toLocaleString()} ${CONFIG.tokenSymbol}` : 'CLAIM MINING';
+    }
+}
 
-bot.command('banner', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const t = ctx.message.text.replace(/^\/banner\s*/, '');
-    await setConfig({ banner: t });
-    ctx.reply(t ? '✅ Banner set' : '✅ Banner cleared');
-});
-
-bot.command('user', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const id = ctx.message.text.split(/\s+/)[1];
-    if (!id) return ctx.reply('/user <id>');
-    const s = await userRef(id).get();
-    if (!s.exists) return ctx.reply('Not found');
-    const u = s.data();
-    ctx.replyWithHTML(
-        `<b>@${esc(u.username || '')}</b> (${u.userId})\n` +
-        `Balance: ${(u.balance || 0).toLocaleString()}\n` +
-        `Earned: ${(u.totalEarned || 0).toLocaleString()}\n` +
-        `Withdrawn: ${(u.totalWithdrawn || 0).toLocaleString()}\n` +
-        `Boost: ${u.boostType || '-'}\n` +
-        `Active refs: ${u.activeReferrals || 0} / Inactive: ${u.inactiveReferrals || 0}\n` +
-        `Banned: ${u.banned}\n` +
-        `Wallet: <code>${u.wallet || '-'}</code>`
-    );
-});
-
-// ---- Admin actions ----
-bot.action(/^a:(\w+)(?::(.+))?$/, async (ctx) => {
-    if (!isAdmin(ctx)) return ctx.answerCbQuery('⛔');
-    const [, act, arg] = ctx.match;
-    await ctx.answerCbQuery().catch(() => {});
-
+async function claimMining() {
+    if (isClaimingMining) return;
+    if (!getMiningData().canClaim) return showToast('Not ready yet', 'warning');
+    
+    isClaimingMining = true;
+    const btn = $('claimMiningBtn');
+    if (btn) btn.disabled = true;
+    
     try {
-        if (act === 'home') {
-            const p = await buildAdminPanel();
-            return ctx.editMessageText(p.text, { parse_mode: 'HTML', ...p.kb }).catch(() => {});
+        const res = await apiRequest('/mining/claim', { method: 'POST' });
+        if (res.success) {
+            currentUser = res.user;
+            renderAll();
+            vibrate('success');
+            showToast(`✅ +${res.reward} ${CONFIG.tokenSymbol}`, 'success');
+        } else {
+            showToast(res.error, 'error');
+            vibrate('error');
         }
-        if (act === 'tg') {
-            const c = await getConfig();
-            await setConfig({ [arg]: !c[arg] });
-            const p = await buildAdminPanel();
-            return ctx.editMessageText(p.text, { parse_mode: 'HTML', ...p.kb }).catch(() => {});
-        }
-        if (act === 'wd') {
-            // ⚠️ NO orderBy → NO index needed
-            const snap = await db.collection('withdrawals')
-                .where('status', '==', 'pending')
-                .limit(10)
-                .get();
-            if (snap.empty) return ctx.reply('✅ No pending withdrawals');
-
-            const sorted = snap.docs
-                .map(d => ({ id: d.id, ...d.data() }))
-                .sort((a, b) => a.createdAt - b.createdAt);
-
-            for (const w of sorted.slice(0, 5)) {
-                await ctx.replyWithHTML(
-                    `💸 <b>${w.amount.toLocaleString()} $GROYP</b>\n` +
-                    `👤 @${esc(w.username || '')}\n` +
-                    `💳 <code>${w.wallet || w.walletAddress || '-'}</code>\n` +
-                    `📅 ${new Date(w.createdAt).toLocaleString()}`,
-                    Markup.inlineKeyboard([[
-                        Markup.button.callback('✅ Approve', 'a:wp:' + w.id),
-                        Markup.button.callback('❌ Reject', 'a:wr:' + w.id)
-                    ]])
-                );
-            }
-            return;
-        }
-        if (act === 'wp') {
-            const d = await db.runTransaction(async (tx) => {
-                const wr = db.collection('withdrawals').doc(arg);
-                const w = await tx.get(wr);
-                if (!w.exists) throw new Error('Not found');
-                const x = w.data();
-                if (x.status !== 'pending') throw new Error('Already ' + x.status);
-                tx.update(wr, { status: 'approved', approvedAt: Date.now() });
-                tx.set(userRef(x.userId), {
-                    totalWithdrawn: inc(x.amount),
-                    pendingWd: inc(-1)
-                }, { merge: true });
-                return x;
-            });
-            statInc('pendingCount', -1);
-            statInc('pendingAmount', -d.amount);
-            statInc('withdrawnTotal', d.amount);
-            notify(d.userId, `✅ Your withdrawal of <b>${d.amount} ${DEFAULTS.symbol}</b> has been approved! Funds will be sent shortly.`);
-            return ctx.reply(`✅ Approved: ${d.amount} → @${d.username}`);
-        }
-        if (act === 'wr') {
-            sessions.set(ADMIN_ID, { step: 'reject_reason', withdrawalId: arg });
-            return ctx.reply('📝 Send the rejection reason (will be sent to the user):');
-        }
-        if (act === 'tasks') {
-            const tasks = await getTasks();
-            const txt = '📝 <b>Tasks</b>\n\n' + tasks.map((t, i) =>
-                `${i + 1}. <b>${esc(t.name)}</b> (+${t.reward}) [${t.verify}]\n${esc(t.url)}`
-            ).join('\n\n');
-            return ctx.replyWithHTML(txt, Markup.inlineKeyboard([
-                [Markup.button.callback('➕ Add', 'a:ta')],
-                ...tasks.map(t => [Markup.button.callback('🗑 ' + t.name.slice(0, 30), 'a:td:' + t.id)])
-            ]));
-        }
-        if (act === 'td') {
-            const list = (await getTasks()).filter(t => t.id !== arg);
-            await saveTasks(list);
-            return ctx.reply('✅ Deleted');
-        }
-        if (act === 'ta') {
-            sessions.set(ADMIN_ID, { step: 'tname' });
-            return ctx.reply('Task name? (/cancel to abort)');
-        }
-        if (act === 'tv') {
-            const s = sessions.get(ADMIN_ID);
-            if (!s) return;
-            if (arg === 'chat') {
-                s.verify = 'chat';
-                s.step = 'tchat';
-                return ctx.reply('Send the channel/group @username:');
-            }
-            s.verify = 'delay';
-            return finishTask(ctx, s);
-        }
-        if (act === 'bc') {
-            sessions.set(ADMIN_ID, { step: 'bc' });
-            return ctx.reply('📢 Send the broadcast text. /cancel to abort.');
-        }
-    } catch (e) {
-        ctx.reply('⚠️ ' + (e.message || 'Error'));
+    } finally {
+        isClaimingMining = false;
     }
-});
-
-async function finishTask(ctx, s) {
-    const tasks = await getTasks();
-    tasks.push({
-        id: 't' + Date.now(),
-        name: s.name,
-        url: s.url,
-        reward: s.reward,
-        verify: s.verify,
-        chat: s.chat || null,
-        delaySec: 20,
-        iconClass: /t\.me/.test(s.url) ? 'fab fa-telegram' : /x\.com|twitter/.test(s.url) ? 'fab fa-twitter' : 'fas fa-link'
-    });
-    await saveTasks(tasks);
-    sessions.delete(ADMIN_ID);
-    ctx.reply(`✅ Task "${s.name}" added (${s.verify}).`);
 }
 
-async function broadcast(text) {
-    let sent = 0, failed = 0, last = null;
-    for (;;) {
-        let q = db.collection('users').orderBy('__name__').limit(300);
-        if (last) q = q.startAfter(last);
-        const snap = await q.get();
-        if (snap.empty) break;
-        for (const d of snap.docs) {
-            try { await bot.telegram.sendMessage(d.id, '📢 ' + text, { parse_mode: 'HTML' }); sent++; }
-            catch { failed++; }
-            await sleep(45);
-        }
-        last = snap.docs[snap.docs.length - 1];
-    }
-    notify(ADMIN_ID, `✅ Broadcast: ${sent} sent, ${failed} failed.`);
+// ============================================================================
+// ADS — stateful tokens (server-issued ymid)
+// ============================================================================
+function getAdsCooldownLeft() {
+    return Math.max(0, (currentUser?.adsCooldownUntil || 0) - now());
 }
 
-bot.on('text', async (ctx) => {
-    if (!isAdmin(ctx)) return;
-    const s = sessions.get(ADMIN_ID);
-    if (!s) return;
-    const t = ctx.message.text;
+function renderAds() {
+    if (!currentUser) return;
+    
+    const seg = $('adsSegments');
+    if (seg) {
+        const w = currentUser.adsWatched || 0;
+        if (seg.children.length !== CONFIG.MAX_ADS_PER_BATCH) {
+            seg.innerHTML = '<div class="ads-segment"></div>'.repeat(CONFIG.MAX_ADS_PER_BATCH);
+        }
+        [...seg.children].forEach((c, i) => c.classList.toggle('active', i < w));
+    }
+    
+    const acc = $('adsAccumulated');
+    const counter = $('adsCounter');
+    const w = currentUser.adsWatched || 0;
+    const perAd = CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH;
+    if (acc) acc.textContent = `${Math.floor(w * perAd)} ${CONFIG.tokenSymbol}`;
+    if (counter) counter.textContent = `${w}/${CONFIG.MAX_ADS_PER_BATCH}`;
+    
+    const complete = w >= CONFIG.MAX_ADS_PER_BATCH;
+    const cd = getAdsCooldownLeft();
+    const watchBtn = $('watchAdBtn');
+    const claimBtn = $('claimAdsBtn');
+    const cdEl = $('adsCooldown');
+    
+    if (watchBtn) watchBtn.style.display = (!complete && cd <= 0) ? 'flex' : 'none';
+    if (claimBtn) claimBtn.style.display = (complete && cd <= 0) ? 'flex' : 'none';
+    if (cdEl) {
+        cdEl.style.display = cd > 0 ? 'block' : 'none';
+        const t = $('adsTimer');
+        if (t) t.textContent = formatTimeLeft(cd);
+    }
+}
 
-    // Reject with reason
-    if (s.step === 'reject_reason') {
-        const reason = t.trim().slice(0, 200);
-        const wId = s.withdrawalId;
-        sessions.delete(ADMIN_ID);
+async function watchAd() {
+    if (adSequenceActive) return;
+    if ((currentUser.adsWatched || 0) >= CONFIG.MAX_ADS_PER_BATCH) return showToast('Batch complete — claim reward', 'warning');
+    if (getAdsCooldownLeft() > 0) return showToast('Ads on cooldown', 'warning');
+    
+    adSequenceActive = true;
+    const btn = $('watchAdBtn');
+    if (btn) btn.disabled = true;
+    showToast('Loading ad...', 'info');
+    
+    try {
+        // 1. Get stateless token + ymid from server
+        const start = await apiRequest('/ads/start', { method: 'POST', body: { token: adsState.token || null } });
+        if (!start.success) { showToast(start.error, 'error'); return; }
+        
+        const { ymid, token } = start;
+        
+        // 2. Show ad (try Monetag first, fallback to RichAds)
+        let adShown = false;
         try {
-            const d = await db.runTransaction(async (tx) => {
-                const wr = db.collection('withdrawals').doc(wId);
-                const w = await tx.get(wr);
-                if (!w.exists) throw new Error('Not found');
-                const x = w.data();
-                if (x.status !== 'pending') throw new Error('Already ' + x.status);
-                tx.update(wr, { status: 'rejected', rejectReason: reason, rejectedAt: Date.now() });
-                tx.set(userRef(x.userId), {
-                    balance: inc(x.amount),
-                    pendingWd: inc(-1)
-                }, { merge: true });
-                return x;
-            });
-            statInc('pendingCount', -1);
-            statInc('pendingAmount', -d.amount);
-            notify(d.userId,
-                `❌ Your withdrawal of <b>${d.amount} ${DEFAULTS.symbol}</b> was rejected.\n\n<b>Reason:</b> ${esc(reason)}\n\nFunds returned to your balance.`
-            );
-            await ctx.reply(`✅ Rejected: ${d.amount}\nReason: ${reason}`);
-        } catch (e) {
-            await ctx.reply('⚠️ Error: ' + e.message);
+            if (typeof window.show_12265394 === 'function') {
+                await window.show_12265394({ ymid });
+                adShown = true;
+            }
+        } catch (e) { console.warn('Monetag failed:', e); }
+        
+        if (!adShown && window.TelegramAdsController) {
+            try {
+                await new Promise((res, rej) => {
+                    new TelegramAdsController().showRewardedVideo({ onReward: res, onError: rej });
+                });
+                adShown = true;
+            } catch (e) { console.warn('RichAds failed:', e); }
+        }
+        
+        if (!adShown) { showToast('No ad available. Try again.', 'error'); return; }
+        
+        // 3. Confirm with server
+        const confirm = await apiRequest('/ads/watch', { method: 'POST', body: { ymid, token } });
+        if (confirm.success) {
+            adsState.token = confirm.token;
+            currentUser.adsWatched = confirm.watched;
+            vibrate('light');
+            renderAds();
+            showToast(`+${CONFIG.REWARD_PER_AD} ${CONFIG.tokenSymbol}`, 'success');
+        } else {
+            showToast(confirm.error, 'error');
+        }
+    } finally {
+        adSequenceActive = false;
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function claimAdsReward() {
+    if (isClaimingAds) return;
+    if ((currentUser.adsWatched || 0) < CONFIG.MAX_ADS_PER_BATCH) return;
+    
+    isClaimingAds = true;
+    try {
+        const res = await apiRequest('/ads/claim', { method: 'POST', body: { token: adsState.token } });
+        if (res.success) {
+            currentUser = res.user;
+            adsState.token = null;
+            vibrate('success');
+            showToast(`✅ +${res.reward} ${CONFIG.tokenSymbol}`, 'success');
+            renderAll();
+        } else {
+            showToast(res.error, 'error');
+        }
+    } finally {
+        isClaimingAds = false;
+    }
+}
+
+// ============================================================================
+// TASKS
+// ============================================================================
+function renderTasks() {
+    const c = $('taskList');
+    if (!c) return;
+    if (!tasks.length) return c.innerHTML = '<div class="empty-state">No tasks available</div>';
+    
+    const done = new Set(currentUser?.completedTasks || []);
+    c.innerHTML = tasks.map(t => {
+        const d = done.has(t.id);
+        const inProgress = taskStartedAt[t.id] && !d;
+        return `<div class="task-item ${d ? 'done' : ''}" data-task-id="${t.id}">
+            <div class="task-icon"><i class="${t.iconClass || 'fas fa-link'}"></i></div>
+            <div class="task-info">
+                <div class="task-name">${t.name}</div>
+                <div class="task-reward">+${t.reward} ${CONFIG.tokenSymbol}</div>
+            </div>
+            <button class="task-btn ${d ? 'completed' : ''}" data-act="${inProgress ? 'verify' : 'start'}" ${d ? 'disabled' : ''}>
+                ${d ? '✓ DONE' : inProgress ? 'VERIFY' : 'START'}
+            </button>
+        </div>`;
+    }).join('');
+}
+
+async function taskAction(taskId, action) {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    
+    if (action === 'start') {
+        taskStartedAt[taskId] = Date.now();
+        
+        // Open the task URL
+        if (/^https:\/\/t\.me\//.test(task.url)) {
+            tg?.openTelegramLink ? tg.openTelegramLink(task.url) : window.open(task.url, '_blank');
+        } else {
+            tg?.openLink ? tg.openLink(task.url) : window.open(task.url, '_blank');
+        }
+        
+        showToast('Complete the task, then press VERIFY', 'info');
+        
+        // Change button to VERIFY
+        const item = document.querySelector(`[data-task-id="${taskId}"]`);
+        if (item) {
+            const btn = item.querySelector('.task-btn');
+            btn.textContent = 'VERIFY';
+            btn.dataset.act = 'verify';
         }
         return;
     }
-
-    if (s.step === 'tname') { s.name = t.slice(0, 60); s.step = 'turl'; return ctx.reply('Task URL (https://...):'); }
-    if (s.step === 'turl') {
-        if (!/^https:\/\//.test(t)) return ctx.reply('❌ Must start with https://');
-        s.url = t; s.step = 'treward';
-        return ctx.reply('Reward amount (number):');
-    }
-    if (s.step === 'treward') {
-        const n = parseInt(t);
-        if (!(n > 0)) return ctx.reply('❌ Invalid number');
-        s.reward = n; s.step = 'tverify';
-        return ctx.reply('Verification type?', Markup.inlineKeyboard([
-            [Markup.button.callback('Channel/Group member', 'a:tv:chat')],
-            [Markup.button.callback('Link (time delay)', 'a:tv:delay')]
-        ]));
-    }
-    if (s.step === 'tchat') {
-        if (!/^@\w{4,}$/.test(t)) return ctx.reply('❌ Send like @mychannel');
-        s.chat = t;
-        return finishTask(ctx, s);
-    }
-    if (s.step === 'bc') {
-        sessions.delete(ADMIN_ID);
-        ctx.reply('⏳ Broadcasting...');
-        broadcast(t).catch(e => notify(ADMIN_ID, 'Broadcast error: ' + e.message));
-    }
-});
-
-bot.catch((e, ctx) => log('BOT ERR', ctx?.updateType, e.message));
-
-// ============================================================================
-// 12. EXPRESS APP
-// ============================================================================
-const app = express();
-app.set('trust proxy', 1);
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, frameguard: false }));
-app.use(cors({ origin: APP_URL }));
-app.use(express.json({ limit: '100kb' }));
-
-// Static files
-const FILES = {
-    '/': 'index.html',
-    '/index.html': 'index.html',
-    '/app.js': 'app.js',
-    '/style.css': 'style.css'
-};
-
-app.get(Object.keys(FILES), (req, res) => {
-    res.set('Cache-Control',
-        req.path === '/' || req.path === '/index.html' ? 'no-cache' : 'public, max-age=300');
-    res.sendFile(path.join(__dirname, FILES[req.path]));
-});
-
-app.get('/health', (_, res) => res.send('ok'));
-
-app.get('/tonconnect-manifest.json', (_, res) => res.json({
-    url: APP_URL,
-    name: 'Groyper Mine',
-    iconUrl: 'https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png',
-    termsOfUseUrl: APP_URL + '/terms',
-    privacyPolicyUrl: APP_URL + '/privacy'
-}));
-
-app.get('/terms', (_, res) => res.send('<h1>Terms</h1><p>Community incentives only. No investment offer.</p>'));
-app.get('/privacy', (_, res) => res.send('<h1>Privacy</h1><p>We store Telegram ID, username, wallet, and in-app activity. We never access your keys.</p>'));
-
-// ============================================================================
-// 13. API ROUTES
-// ============================================================================
-const api = express.Router();
-api.use(authMw);
-
-// ---- Init ----
-api.get('/init', h(async (req, res) => {
-    const [cfg, tasks, price, snap] = await Promise.all([
-        getConfig(), getTasks(), getPrice(), userRef(req.tg.id).get()
-    ]);
-    const u = snap.exists ? snap.data() : null;
-    if (u?.banned) throw new AppErr('Account banned', 403);
-    res.json({
-        success: true,
-        user: u ? pub(u) : null,
-        tasks,
-        config: publicConfig(cfg),
-        price,
-        serverTime: Date.now(),
-        banner: cfg.banner || ''
-    });
-}));
-
-api.get('/price', h(async (req, res) => res.json({ success: true, price: await getPrice() })));
-
-// ---- Register ----
-api.post('/register', h(async (req, res) => {
-    const tg = req.tg;
-    const { wallet, startParam } = req.body || {};
-    if (!wallet || typeof wallet !== 'string' || wallet.length < 10) {
-        throw new AppErr('Invalid wallet address');
-    }
-
-    let created = false;
-    const user = await db.runTransaction(async (tx) => {
-        const uRef = userRef(tg.id);
-        const us = await tx.get(uRef);
-
-        if (us.exists) {
-            const u = us.data();
-            if (u.banned) throw new AppErr('Account banned', 403);
-            if (!u.wallet) {
-                tx.update(uRef, { wallet });
-                return { ...u, wallet };
-            }
-            return u;
+    
+    // Verify — check elapsed time for delay tasks
+    if (task.verify === 'delay') {
+        const elapsed = (Date.now() - (taskStartedAt[taskId] || 0)) / 1000;
+        const required = task.delaySec || 20;
+        if (elapsed < required) {
+            return showToast(`Wait ${Math.ceil(required - elapsed)}s before verifying`, 'warning');
         }
-
-        const u = { ...newUser(tg), wallet };
-
-        if (startParam && startParam !== tg.id && /^\d{5,15}$/.test(startParam)) {
-            const refSnap = await tx.get(userRef(startParam));
-            if (refSnap.exists) {
-                u.referredBy = startParam;
-                tx.set(userRef(startParam).collection('referrals').doc(tg.id), {
-                    username: tg.username || tg.first_name,
-                    active: false,
-                    createdAt: Date.now()
-                });
-                tx.set(userRef(startParam), { inactiveReferrals: inc(1) }, { merge: true });
-            }
-        }
-
-        tx.set(uRef, u);
-        created = true;
-        return u;
-    });
-
-    if (created) statInc('users');
-    res.json({ success: true, user: pub(user) });
-}));
-
-// ---- Mining ----
-api.post('/mining/claim', h(async (req, res) => {
-    const cfg = await getConfig();
-    if (!cfg.miningEnabled) throw new AppErr('Mining is temporarily paused');
-    await dailyLoad();
-
-    const id = req.tg.id;
-    const nowMs = Date.now();
-    let refInfo = null;
-
-    const out = await db.runTransaction(async (tx) => {
-        refInfo = null;
-        const ref = userRef(id);
-        const s = await tx.get(ref);
-        if (!s.exists) throw new AppErr('User not found');
-
-        const u = s.data();
-        if (u.banned) throw new AppErr('Account banned', 403);
-        if (nowMs - (u.lastMiningClaim || 0) < cfg.cooldownMs - 3000) throw new AppErr('Not ready yet');
-
-        const reward = cfg.miningReward * mult(u, nowMs);
-        capCheck(cfg, reward);
-
-        tx.update(ref, {
-            balance: inc(reward),
-            totalEarned: inc(reward),
-            lastMiningClaim: nowMs,
-            isActive: true
-        });
-
-        if (!u.isActive && u.referredBy) {
-            const rr = userRef(u.referredBy);
-            tx.set(rr, {
-                activeReferrals: inc(1),
-                inactiveReferrals: inc(-1),
-                balance: inc(cfg.referralReward),
-                totalEarned: inc(cfg.referralReward)
-            }, { merge: true });
-            tx.set(rr.collection('referrals').doc(id), { active: true }, { merge: true });
-            refInfo = { to: u.referredBy, name: u.username || u.firstName };
-        }
-
-        return {
-            reward,
-            user: {
-                ...u,
-                balance: (u.balance || 0) + reward,
-                totalEarned: (u.totalEarned || 0) + reward,
-                lastMiningClaim: nowMs,
-                isActive: true
-            }
-        };
-    });
-
-    capCommit(out.reward);
-    statInc('claims');
-    if (refInfo) {
-        capCommit(cfg.referralReward);
-        notify(refInfo.to, `🎉 +${cfg.referralReward} ${cfg.symbol} — your friend @${esc(refInfo.name)} is now active!`);
     }
-    res.json({ success: true, reward: out.reward, user: pub(out.user) });
-}));
-
-// ---- Ads ----
-api.post('/ads/start', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const nowMs = Date.now();
-
-    const s = await userRef(id).get();
-    if (!s.exists) throw new AppErr('User not found');
-    const u = s.data();
-    if (u.banned) throw new AppErr('Account banned', 403);
-
-    const watched = u.adsWatched || 0;
-    const cooldownUntil = u.adsCooldownUntil || 0;
-
-    if (nowMs < cooldownUntil) throw new AppErr('Ads are on cooldown');
-    if (watched >= cfg.adsPerBatch) throw new AppErr('Batch complete. Claim your reward first.');
-
-    const ymid = crypto.randomBytes(16).toString('hex');
-    await db.collection('ads_pending').doc(ymid).set({
-        userId: id,
-        createdAt: nowMs,
-        completed: false
-    });
-    setTimeout(() => db.collection('ads_pending').doc(ymid).delete().catch(() => {}), 600000);
-
-    res.json({ success: true, ymid, token: ymid });
-}));
-
-api.post('/ads/watch', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const nowMs = Date.now();
-    const { ymid } = req.body || {};
-    if (!ymid || typeof ymid !== 'string') throw new AppErr('Missing ymid');
-
-    const ref = db.collection('ads_pending').doc(ymid);
-    const snap = await ref.get();
-    if (!snap.exists) throw new AppErr('Invalid ad session');
-    const p = snap.data();
-    if (p.userId !== id) throw new AppErr('Wrong user');
-    if (p.completed) throw new AppErr('Already used');
-
-    const age = nowMs - p.createdAt;
-    if (age > 600000) throw new AppErr('Ad session expired');
-    if (age < cfg.adsMinGapSec * 1000) throw new AppErr('Ad was not completed');
-
-    const s = await userRef(id).get();
-    if (!s.exists) throw new AppErr('User not found');
-    const u = s.data();
-    if (nowMs < (u.adsCooldownUntil || 0)) throw new AppErr('Ads are on cooldown');
-    if ((u.adsWatched || 0) >= cfg.adsPerBatch) throw new AppErr('Batch complete');
-
-    await ref.update({ completed: true });
-    await userRef(id).update({ adsWatched: inc(1) });
-    const fresh = await userRef(id).get();
-
-    res.json({ success: true, watched: fresh.data().adsWatched, token: ymid });
-}));
-
-api.post('/ads/claim', h(async (req, res) => {
-    const cfg = await getConfig();
-    await dailyLoad();
-    const id = req.tg.id;
-    const nowMs = Date.now();
-
-    const out = await db.runTransaction(async (tx) => {
-        const ref = userRef(id);
-        const s = await tx.get(ref);
-        if (!s.exists) throw new AppErr('User not found');
-        const u = s.data();
-        if (u.banned) throw new AppErr('Account banned', 403);
-        if ((u.adsWatched || 0) < cfg.adsPerBatch) throw new AppErr('Watch all ads first');
-
-        capCheck(cfg, cfg.adsReward);
-        const until = nowMs + cfg.adsCooldownMs;
-        tx.update(ref, {
-            balance: inc(cfg.adsReward),
-            totalEarned: inc(cfg.adsReward),
-            adsWatched: 0,
-            adsCooldownUntil: until
-        });
-        return {
-            ...u,
-            balance: (u.balance || 0) + cfg.adsReward,
-            totalEarned: (u.totalEarned || 0) + cfg.adsReward,
-            adsWatched: 0,
-            adsCooldownUntil: until
-        };
-    });
-
-    capCommit(cfg.adsReward);
-    res.json({ success: true, reward: cfg.adsReward, user: pub(out) });
-}));
-
-// ---- Check-in ----
-api.post('/checkin', h(async (req, res) => {
-    const cfg = await getConfig();
-    await dailyLoad();
-    const id = req.tg.id;
-    const day = Math.floor(Date.now() / 86400e3);
-
-    const out = await db.runTransaction(async (tx) => {
-        const ref = userRef(id);
-        const s = await tx.get(ref);
-        if (!s.exists) throw new AppErr('User not found');
-        const u = s.data();
-        if (u.banned) throw new AppErr('Account banned', 403);
-        if (u.lastCheckinDay === day) throw new AppErr('Already checked in today');
-
-        const streak = u.lastCheckinDay === day - 1 ? (u.streak || 0) + 1 : 1;
-        const reward = cfg.checkinRewards[(streak - 1) % cfg.checkinRewards.length];
-        capCheck(cfg, reward);
-        tx.update(ref, {
-            balance: inc(reward),
-            totalEarned: inc(reward),
-            streak,
-            lastCheckinDay: day
-        });
-        return {
-            reward,
-            user: {
-                ...u,
-                balance: (u.balance || 0) + reward,
-                totalEarned: (u.totalEarned || 0) + reward,
-                streak,
-                lastCheckinDay: day
-            }
-        };
-    });
-
-    capCommit(out.reward);
-    res.json({ success: true, reward: out.reward, user: pub(out.user) });
-}));
-
-// ---- Tasks ----
-api.post('/tasks/verify', h(async (req, res) => {
-    const cfg = await getConfig();
-    await dailyLoad();
-    const id = req.tg.id;
-    const taskId = String(req.body?.taskId || '');
-    const task = (await getTasks()).find(t => t.id === taskId);
-    if (!task) throw new AppErr('Task not found');
-
-    if (task.verify === 'chat') {
-        let ok = false;
-        try {
-            const m = await bot.telegram.getChatMember(task.chat, +id);
-            ok = ['member', 'administrator', 'creator'].includes(m.status) ||
-                 (m.status === 'restricted' && m.is_member);
-        } catch (e) { log('getChatMember:', e.message); }
-        if (!ok) throw new AppErr('Please join first, then press Verify');
-    }
-
-    const out = await db.runTransaction(async (tx) => {
-        const ref = userRef(id);
-        const s = await tx.get(ref);
-        if (!s.exists) throw new AppErr('User not found');
-        const u = s.data();
-        if (u.banned) throw new AppErr('Account banned', 403);
-        if ((u.completedTasks || []).includes(taskId)) throw new AppErr('Already completed');
-        capCheck(cfg, task.reward);
-
-        tx.update(ref, {
-            completedTasks: arrayUnion(taskId),
-            balance: inc(task.reward),
-            totalEarned: inc(task.reward)
-        });
-        return {
-            ...u,
-            completedTasks: [...(u.completedTasks || []), taskId],
-            balance: (u.balance || 0) + task.reward,
-            totalEarned: (u.totalEarned || 0) + task.reward
-        };
-    });
-
-    capCommit(task.reward);
-    res.json({ success: true, reward: task.reward, user: pub(out) });
-}));
-
-// ---- Referrals ----
-api.get('/referrals', h(async (req, res) => {
-    let q = userRef(req.tg.id).collection('referrals').orderBy('createdAt', 'desc').limit(20);
-    if (req.query.cursor) q = q.startAfter(Number(req.query.cursor));
-    const snap = await q.get();
-    const items = snap.docs.map(d => ({
-        username: d.data().username,
-        active: !!d.data().active
-    }));
-    res.json({ success: true, items, cursor: snap.size === 20 ? snap.docs[19].data().createdAt : null });
-}));
-
-api.post('/referrals/milestone', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const count = +req.body?.count;
-    const m = cfg.milestones.find(x => x.count === count);
-    if (!m) throw new AppErr('Invalid milestone');
-
-    const out = await db.runTransaction(async (tx) => {
-        const ref = userRef(id);
-        const s = await tx.get(ref);
-        if (!s.exists) throw new AppErr('User not found');
-        const u = s.data();
-        if (u.banned) throw new AppErr('Account banned', 403);
-        if ((u.claimedMilestones || []).includes(count)) throw new AppErr('Already claimed');
-        if ((u.activeReferrals || 0) < count) throw new AppErr('Not enough active referrals');
-
-        tx.update(ref, {
-            claimedMilestones: arrayUnion(count),
-            balance: inc(m.reward),
-            totalEarned: inc(m.reward)
-        });
-        return {
-            ...u,
-            claimedMilestones: [...(u.claimedMilestones || []), count],
-            balance: (u.balance || 0) + m.reward,
-            totalEarned: (u.totalEarned || 0) + m.reward
-        };
-    });
-
-    statInc('distributed', m.reward);
-    res.json({ success: true, reward: m.reward, user: pub(out) });
-}));
-
-// ---- Withdrawals ----
-// ⚠️ NO orderBy → NO composite index required
-api.get('/withdrawals', h(async (req, res) => {
-    try {
-        const snap = await db.collection('withdrawals')
-            .where('userId', '==', req.tg.id)
-            .limit(20)
-            .get();
-
-        const items = snap.docs
-            .map(d => {
-                const x = d.data();
-                return {
-                    id: d.id,
-                    amount: x.amount,
-                    status: x.status,
-                    createdAt: x.createdAt
-                };
-            })
-            .sort((a, b) => b.createdAt - a.createdAt)
-            .slice(0, 10);
-
-        res.json({ success: true, items, cursor: null });
-    } catch (e) {
-        log('withdrawals error:', e.message);
-        res.json({ success: true, items: [], cursor: null });
-    }
-}));
-
-api.post('/withdraw/intent', h(async (req, res) => {
-    const cfg = await getConfig();
-    if (!cfg.withdrawEnabled) throw new AppErr('Withdrawals are temporarily paused');
-
-    const id = req.tg.id;
-    const amount = Math.floor(Number(req.body?.amount));
-    const nowMs = Date.now();
-
-    if (!(amount >= cfg.minWithdraw)) throw new AppErr('Minimum withdrawal is ' + cfg.minWithdraw);
-
-    const s = await userRef(id).get();
-    if (!s.exists) throw new AppErr('User not found');
-    const u = s.data();
-    if (u.banned) throw new AppErr('Account banned', 403);
-    if (!u.wallet) throw new AppErr('Connect your wallet first');
-    if (amount > (u.balance || 0)) throw new AppErr('Insufficient balance');
-    if (!u.isActive) throw new AppErr('Claim mining at least once before withdrawing');
-    if (nowMs - (u.createdAt || 0) < cfg.minAccountAgeHours * 3600e3) {
-        throw new AppErr(`Withdrawals unlock ${cfg.minAccountAgeHours}h after registration`);
-    }
-    if ((u.pendingWd || 0) >= cfg.maxPendingWd) throw new AppErr('Too many pending withdrawals');
-
-    const feeRequired = !u.withdrawFeePaid;
-    const ref = db.collection('intents').doc();
-    const it = {
-        userId: id,
-        kind: 'withdraw',
-        amount,
-        feeRequired,
-        amountTon: cfg.feeTon,
-        wallet: u.wallet,
-        status: 'open',
-        createdAt: nowMs,
-        expiresAt: nowMs + 600000
-    };
-    await ref.set(it);
-
-    res.json({
-        success: true,
-        requestId: ref.id,
-        feeRequired,
-        address: OWNER_WALLET,
-        amountTon: cfg.feeTon,
-        payload: feeRequired ? Buffer.from('gm' + ref.id).toString('base64') : undefined
-    });
-}));
-
-api.post('/withdraw/confirm', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const iRef = db.collection('intents').doc(String(req.body?.requestId || 'x'));
-    const is = await iRef.get();
-    const it = is.data();
-    if (!it || it.userId !== id || it.kind !== 'withdraw' || it.status !== 'open' || it.expiresAt < Date.now()) {
-        throw new AppErr('Request expired. Please start again.');
-    }
-
-    let hash = null;
-    if (it.feeRequired) {
-        hash = await verifyPayment(it, String(req.body?.boc || ''));
-    }
-
-    const user = await db.runTransaction(async (tx) => {
-        const uRef = userRef(id);
-        const [us, is2, ps] = await Promise.all([
-            tx.get(uRef),
-            tx.get(iRef),
-            hash ? tx.get(db.doc('used_payments/' + hash)) : null
-        ]);
-        if (is2.data()?.status !== 'open') throw new AppErr('Request already processed');
-        if (ps?.exists) throw new AppErr('Payment already used');
-
-        const u = us.data();
-        if (u.banned) throw new AppErr('Account banned', 403);
-        if (it.amount > (u.balance || 0)) throw new AppErr('Insufficient balance');
-        if ((u.pendingWd || 0) >= cfg.maxPendingWd) throw new AppErr('Too many pending withdrawals');
-
-        const wRef = db.collection('withdrawals').doc();
-        tx.set(wRef, {
-            id: wRef.id,
-            userId: id,
-            username: u.username || u.firstName,
-            amount: it.amount,
-            wallet: u.wallet,
-            status: 'pending',
-            createdAt: Date.now()
-        });
-        tx.update(iRef, { status: 'done' });
-        if (hash) tx.set(db.doc('used_payments/' + hash), { userId: id, kind: 'withdraw-fee', at: Date.now() });
-        tx.update(uRef, {
-            balance: inc(-it.amount),
-            pendingWd: inc(1),
-            withdrawFeePaid: true
-        });
-        return { ...u, balance: (u.balance || 0) - it.amount, withdrawFeePaid: true };
-    });
-
-    statInc('pendingCount');
-    statInc('pendingAmount', it.amount);
-    if (hash) statInc('tonRevenue', it.amountTon);
-
-    if (ADMIN_ID) {
-        notify(ADMIN_ID,
-            `💸 <b>New Withdrawal</b>\n\n👤 @${esc(user.username || '')}\n💰 ${it.amount.toLocaleString()} ${cfg.symbol}\n💳 <code>${user.wallet}</code>\n\nUse /admin → 📋 Pending withdrawals`
-        );
-    }
-
-    res.json({ success: true, user: pub(user) });
-}));
-
-// ---- Boosts ----
-api.post('/boost/intent', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const nowMs = Date.now();
-    const type = String(req.body?.type || '');
-    const b = cfg.boosts[type];
-    if (!b) throw new AppErr('Invalid boost');
-
-    const s = await userRef(id).get();
-    if (!s.exists) throw new AppErr('User not found');
-    const u = s.data();
-    if (u.banned) throw new AppErr('Account banned', 403);
-    if (!u.wallet) throw new AppErr('Connect your wallet first');
-    if (mult(u, nowMs) > b.mult) throw new AppErr('You already have a stronger active boost');
-
-    const ref = db.collection('intents').doc();
-    await ref.set({
-        userId: id,
-        kind: 'boost',
-        type,
-        amountTon: b.price,
-        wallet: u.wallet,
-        status: 'open',
-        createdAt: nowMs,
-        expiresAt: nowMs + 600000
-    });
-
-    res.json({
-        success: true,
-        requestId: ref.id,
-        address: OWNER_WALLET,
-        amountTon: b.price,
-        payload: Buffer.from('gm' + ref.id).toString('base64')
-    });
-}));
-
-api.post('/boost/confirm', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const iRef = db.collection('intents').doc(String(req.body?.requestId || 'x'));
-    const is = await iRef.get();
-    const it = is.data();
-    if (!it || it.userId !== id || it.kind !== 'boost' || it.status !== 'open' || it.expiresAt < Date.now()) {
-        throw new AppErr('Request expired. Please start again.');
-    }
-
-    const b = cfg.boosts[it.type];
-    if (!b) throw new AppErr('Invalid boost');
-    const hash = await verifyPayment(it, String(req.body?.boc || ''));
-    const exp = Date.now() + cfg.boostDays * 86400e3;
-
-    const user = await db.runTransaction(async (tx) => {
-        const uRef = userRef(id);
-        const [us, is2, ps] = await Promise.all([
-            tx.get(uRef),
-            tx.get(iRef),
-            tx.get(db.doc('used_payments/' + hash))
-        ]);
-        if (is2.data()?.status !== 'open') throw new AppErr('Request already processed');
-        if (ps.exists) throw new AppErr('Payment already used');
-
-        tx.update(uRef, {
-            boostMultiplier: b.mult,
-            boostType: it.type,
-            boostExpiresAt: exp
-        });
-        tx.update(iRef, { status: 'done' });
-        tx.set(db.doc('used_payments/' + hash), { userId: id, kind: 'boost', at: Date.now() });
-        return { ...us.data(), boostMultiplier: b.mult, boostType: it.type, boostExpiresAt: exp };
-    });
-
-    statInc('tonRevenue', it.amountTon);
-    res.json({ success: true, user: pub(user) });
-}));
-
-// ---- Leaderboard ----
-api.get('/leaderboard', h(async (req, res) => {
-    const d = await cached('lb', 300000, async () => {
-        const s = await db.doc('leaderboard/top100').get();
-        return s.exists ? s.data() : { list: [] };
-    });
-    res.json({ success: true, list: d.list, updatedAt: d.updatedAt });
-}));
-
-app.use('/api', api);
-
-// ============================================================================
-// 14. CRON ENDPOINTS
-// ============================================================================
-const cron = (fn) => h(async (req, res) => {
-    if (!CRON_KEY || !safeEq(String(req.query.key || ''), CRON_KEY)) {
-        return res.status(403).json({ success: false });
-    }
-    res.json({ success: true, ...(await fn()) });
-});
-
-app.get('/cron/leaderboard', cron(async () => {
-    const snap = await db.collection('users').orderBy('totalEarned', 'desc').limit(100).get();
-    const list = snap.docs.filter(d => !d.data().banned).map(d => ({
-        username: d.data().username || d.data().firstName,
-        totalEarned: d.data().totalEarned
-    }));
-    await db.doc('leaderboard/top100').set({ list, updatedAt: Date.now() });
-    bust('lb');
-    return { count: list.length };
-}));
-
-app.get('/cron/cleanup', cron(async () => {
-    const snap = await db.collection('intents').where('expiresAt', '<', Date.now() - 3600e3).limit(400).get();
-    const b = db.batch();
-    snap.docs.forEach(d => b.delete(d.ref));
-    await b.commit();
-    return { deleted: snap.size };
-}));
-
-app.use((req, res) => res.status(404).json({ success: false, error: 'Not found' }));
-app.use((e, req, res, next) => {
-    log('EXPRESS:', e.message);
-    res.status(500).json({ success: false, error: 'Server error' });
-});
-
-// ============================================================================
-// 15. LAUNCH
-// ============================================================================
-async function initDefaults() {
-    try {
-        const cfgDoc = await db.doc('settings/config').get();
-        if (!cfgDoc.exists) await db.doc('settings/config').set(DEFAULTS);
-
-        const tasksDoc = await db.doc('settings/tasks').get();
-        if (!tasksDoc.exists) await db.doc('settings/tasks').set({ list: DEFAULT_TASKS });
-
-        log('✅ Defaults initialized');
-    } catch (e) {
-        log('Init error:', e.message);
+    
+    const res = await apiRequest('/tasks/verify', { method: 'POST', body: { taskId } });
+    if (res.success) {
+        currentUser = res.user;
+        delete taskStartedAt[taskId];
+        vibrate('success');
+        showToast(`✅ +${res.reward} ${CONFIG.tokenSymbol}`, 'success');
+        renderAll();
+    } else {
+        showToast(res.error, 'error');
+        vibrate('error');
     }
 }
 
-const server = app.listen(PORT, async () => {
-    await initDefaults();
-    log(`🚀 Groyper Mine listening on ${PORT}`);
-});
+// ============================================================================
+// CHECK-IN
+// ============================================================================
+function renderCheckin() {
+    const btn = $('checkinBtn');
+    if (!btn || !currentUser) return;
+    const today = Math.floor(now() / 86400000);
+    const done = currentUser.lastCheckinDay === today;
+    btn.disabled = done;
+    btn.textContent = done ? '✓ DONE' : 'CHECK IN';
+    const streak = $('streakCount');
+    if (streak) streak.textContent = `${currentUser.streak || 0} day streak`;
+}
 
-bot.launch({ dropPendingUpdates: true })
-    .then(() => log('🤖 Bot started (polling)'))
-    .catch(err => log('Bot error:', err.message));
+async function checkin() {
+    const res = await apiRequest('/checkin', { method: 'POST' });
+    if (res.success) {
+        currentUser = res.user;
+        vibrate('success');
+        showToast(`🔥 +${res.reward} ${CONFIG.tokenSymbol}`, 'success');
+        renderAll();
+    } else {
+        showToast(res.error, 'error');
+    }
+}
 
-process.on('unhandledRejection', (e) => log('UNHANDLED:', e?.message || e));
-process.on('SIGTERM', async () => {
-    log('SIGTERM received');
-    await flushStats();
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 8000);
-});
+// ============================================================================
+// REFERRAL
+// ============================================================================
+function renderReferral() {
+    if (!currentUser) return;
+    
+    const set = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+    set('activeReferrals', currentUser.activeReferrals || 0);
+    set('inactiveReferrals', currentUser.inactiveReferrals || 0);
+    set('refRewardText', `${CONFIG.REFERRAL_REWARD} ${CONFIG.tokenSymbol}`);
+    
+    const claimed = new Set(currentUser.claimedMilestones || []);
+    const total = currentUser.activeReferrals || 0;
+    const ml = $('milestoneList');
+    
+    if (ml) {
+        ml.innerHTML = CONFIG.MILESTONES.map(m => {
+            const reached = total >= m.count;
+            const got = claimed.has(m.count);
+            const pct = Math.min(100, (total / m.count) * 100);
+            return `<div class="milestone-item ${got ? 'completed' : reached ? 'current' : ''}">
+                <div class="milestone-icon">${got ? '✅' : reached ? '🎁' : '🔒'}</div>
+                <div class="milestone-info">
+                    <div class="milestone-count">${m.count} Referrals</div>
+                    <div class="milestone-reward">+${m.reward} ${CONFIG.tokenSymbol}</div>
+                    <div class="milestone-bar"><i style="width:${pct}%"></i></div>
+                </div>
+                ${reached && !got ? `<button class="task-btn" data-ms="${m.count}">CLAIM</button>` : ''}
+            </div>`;
+        }).join('');
+    }
+    
+    loadReferralList();
+}
+
+async function loadReferralList() {
+    const rl = $('referralList');
+    if (!rl) return;
+    
+    const res = await apiRequest('/referrals');
+    if (!res.success || !res.items?.length) {
+        rl.innerHTML = '<div class="empty-state">No referrals yet</div>';
+        return;
+    }
+    
+    rl.innerHTML = res.items.map(r => `
+        <div class="referral-item">
+            <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(r.username || 'U')}&background=FF4D00&color=fff" alt="">
+            <span class="referral-item-name">@${r.username}</span>
+            <span class="referral-status ${r.active ? 'active' : 'inactive'}">${r.active ? 'ACTIVE' : 'INACTIVE'}</span>
+        </div>
+    `).join('');
+}
+
+async function claimMilestone(count) {
+    const res = await apiRequest('/referrals/milestone', { method: 'POST', body: { count: +count } });
+    if (res.success) {
+        currentUser = res.user;
+        vibrate('success');
+        showToast(`🎉 +${res.reward} ${CONFIG.tokenSymbol}`, 'success');
+        confetti();
+        renderAll();
+    } else {
+        showToast(res.error, 'error');
+    }
+}
+
+function copyReferral() {
+    const link = `https://t.me/${CONFIG.botUsername}/Mine?startapp=${currentUser?.userId || userId}`;
+    navigator.clipboard?.writeText(link);
+    showToast('Link copied!', 'success');
+    vibrate('light');
+}
+
+function shareReferral() {
+    const link = `https://t.me/${CONFIG.botUsername}/Mine?startapp=${currentUser?.userId || userId}`;
+    const text = 'Join Groyper Mine and start mining!';
+    const url = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+    tg?.openTelegramLink ? tg.openTelegramLink(url) : window.open(url);
+}
+
+// ============================================================================
+// WALLET & WITHDRAW
+// ============================================================================
+function renderWallet() {
+    if (!currentUser) return;
+    
+    const u = tg?.initDataUnsafe?.user || {};
+    const set = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+    const img = (id, v) => { const e = $(id); if (e) e.src = v; };
+    
+    set('walletUserName', u.first_name || currentUser.firstName || 'User');
+    set('walletUserHandle', '@' + (u.username || currentUser.username || 'user'));
+    img('walletAvatar', u.photo_url || 'https://ui-avatars.com/api/?name=U&background=FF4D00&color=fff');
+    
+    set('totalWithdrawn', `${Math.floor(currentUser.totalWithdrawn || 0).toLocaleString()} ${CONFIG.tokenSymbol}`);
+    set('availableToWithdraw', `${Math.floor(currentUser.balance || 0).toLocaleString()} ${CONFIG.tokenSymbol}`);
+    set('withdrawWalletAddress', tonWalletAddress ? `${tonWalletAddress.slice(0, 6)}…${tonWalletAddress.slice(-6)}` : 'Not connected');
+    set('minWithdrawHint', `Minimum: ${CONFIG.MIN_WITHDRAW.toLocaleString()} ${CONFIG.tokenSymbol}`);
+    
+    renderWithdrawHistory();
+}
+
+async function renderWithdrawHistory() {
+    const h = $('withdrawHistory');
+    if (!h) return;
+    
+    const res = await apiRequest('/withdrawals');
+    if (!res.success || !res.items?.length) {
+        h.innerHTML = '<div class="empty-state">No withdrawals yet</div>';
+        return;
+    }
+    
+    h.innerHTML = res.items.map(w => `
+        <div class="history-item">
+            <div>
+                <span class="history-amount">${w.amount.toLocaleString()} ${CONFIG.tokenSymbol}</span>
+                <small style="display:block;opacity:.6;font-size:11px">${new Date(w.createdAt).toLocaleDateString()}</small>
+            </div>
+            <span class="history-status ${w.status}">${w.status.toUpperCase()}</span>
+        </div>
+    `).join('');
+}
+
+function validateWithdrawInput() {
+    const inp = $('withdrawAmount');
+    if (!inp || !currentUser) return;
+    const v = parseFloat(inp.value);
+    inp.classList.remove('valid', 'invalid');
+    if (!inp.value) return;
+    if (v < CONFIG.MIN_WITHDRAW || v > (currentUser.balance || 0)) inp.classList.add('invalid');
+    else inp.classList.add('valid');
+}
+
+async function submitWithdraw() {
+    if (isProcessingWithdraw || !currentUser) return;
+    
+    const amount = Math.floor(parseFloat($('withdrawAmount')?.value) || 0);
+    if (amount < CONFIG.MIN_WITHDRAW) return showToast(`Minimum ${CONFIG.MIN_WITHDRAW}`, 'error');
+    if (amount > currentUser.balance) return showToast('Insufficient balance', 'error');
+    if (!tonWalletAddress) return showToast('Connect wallet first', 'error');
+    
+    isProcessingWithdraw = true;
+    const btn = $('withdrawBtn');
+    const original = btn?.innerHTML;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> PROCESSING...'; }
+    
+    try {
+        // 1. Request intent from server
+        const intent = await apiRequest('/withdraw/intent', { method: 'POST', body: { amount } });
+        if (!intent.success) throw new Error(intent.error);
+        
+        // 2. If fee required, send payment
+        let boc = null;
+        if (intent.feeRequired) {
+            try {
+                const result = await window.tonConnectUI.sendTransaction({
+                    validUntil: Math.floor(Date.now() / 1000) + 600,
+                    messages: [{
+                        address: intent.address,
+                        amount: String(Math.round(intent.amountTon * 1e9)),
+                        payload: intent.payload
+                    }]
+                });
+                boc = result.boc;
+            } catch (e) {
+                throw new Error('Payment cancelled');
+            }
+        }
+        
+        // 3. Confirm
+        const confirm = await apiRequest('/withdraw/confirm', {
+            method: 'POST',
+            body: { requestId: intent.requestId, boc }
+        });
+        if (!confirm.success) throw new Error(confirm.error);
+        
+        currentUser = confirm.user;
+        $('withdrawAmount').value = '';
+        vibrate('success');
+        showToast('✅ Withdrawal submitted!', 'success');
+        confetti();
+        renderAll();
+    } catch (e) {
+        showToast(e.message || 'Withdrawal failed', 'error');
+        vibrate('error');
+    } finally {
+        isProcessingWithdraw = false;
+        if (btn) { btn.disabled = false; btn.innerHTML = original; }
+    }
+}
+
+// ============================================================================
+// BOOSTS
+// ============================================================================
+async function buyBoost(type) {
+    if (!tonConnected) return showToast('Connect wallet first', 'warning');
+    const boost = CONFIG.BOOSTS[type];
+    if (!boost) return;
+    
+    const ok = tg?.showConfirm
+        ? await new Promise(r => tg.showConfirm(`Activate ${boost.name} (${boost.multiplier}x) for ${boost.price} TON?`, r))
+        : confirm(`Activate ${boost.name} for ${boost.price} TON?`);
+    if (!ok) return;
+    
+    try {
+        const intent = await apiRequest('/boost/intent', { method: 'POST', body: { type } });
+        if (!intent.success) throw new Error(intent.error);
+        
+        let boc;
+        try {
+            const result = await window.tonConnectUI.sendTransaction({
+                validUntil: Math.floor(Date.now() / 1000) + 600,
+                messages: [{
+                    address: intent.address,
+                    amount: String(Math.round(intent.amountTon * 1e9)),
+                    payload: intent.payload
+                }]
+            });
+            boc = result.boc;
+        } catch (e) {
+            throw new Error('Payment cancelled');
+        }
+        
+        const confirm = await apiRequest('/boost/confirm', {
+            method: 'POST',
+            body: { requestId: intent.requestId, boc }
+        });
+        if (!confirm.success) throw new Error(confirm.error);
+        
+        currentUser = confirm.user;
+        vibrate('success');
+        showToast(`🔥 ${boost.name} activated!`, 'success');
+        confetti();
+        renderAll();
+    } catch (e) {
+        showToast(e.message || 'Boost failed', 'error');
+        vibrate('error');
+    }
+}
+
+// ============================================================================
+// EFFECTS
+// ============================================================================
+function confetti() {
+    const colors = ['#FF4D00', '#FF9500', '#FFD84D', '#F5C451'];
+    for (let i = 0; i < 40; i++) {
+        const el = document.createElement('i');
+        el.style.cssText = `position:fixed;top:-10px;left:${Math.random() * innerWidth}px;width:7px;height:10px;background:${colors[i % 4]};z-index:9999;pointer-events:none;transition:transform ${1.2 + Math.random()}s ease-in,opacity 1.8s`;
+        document.body.appendChild(el);
+        requestAnimationFrame(() => {
+            el.style.transform = `translate(${(Math.random() - .5) * 160}px,${innerHeight + 20}px) rotate(${Math.random() * 720}deg)`;
+            el.style.opacity = 0;
+        });
+        setTimeout(() => el.remove(), 2400);
+    }
+}
+
+// ============================================================================
+// NAVIGATION
+// ============================================================================
+function switchPage(name) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    const page = $('page' + name.charAt(0).toUpperCase() + name.slice(1));
+    if (page) page.classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === name));
+    vibrate('light');
+    scrollTo({ top: 0 });
+    
+    if (name === 'referral') loadReferralList();
+    if (name === 'wallet') renderWithdrawHistory();
+}
+
+// ============================================================================
+// RENDER ALL
+// ============================================================================
+function renderAll() {
+    updateHeaderWallet();
+    renderMining();
+    renderAds();
+    renderTasks();
+    renderCheckin();
+    renderReferral();
+    renderWallet();
+    renderToken();
+}
+
+// ============================================================================
+// EVENT BINDING
+// ============================================================================
+function bindEvents() {
+    document.querySelectorAll('.nav-item').forEach(i => {
+        i.addEventListener('click', () => switchPage(i.dataset.page));
+    });
+    
+    const on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
+    on('claimMiningBtn', claimMining);
+    on('watchAdBtn', watchAd);
+    on('claimAdsBtn', claimAdsReward);
+    on('withdrawBtn', submitWithdraw);
+    on('checkinBtn', checkin);
+    on('refreshTokenBtn', () => fetchTokenPrice(true));
+    on('copyReferralBtn', copyReferral);
+    on('shareReferralBtn', shareReferral);
+    on('maxWithdrawBtn', () => {
+        const inp = $('withdrawAmount');
+        if (inp && currentUser) { inp.value = Math.floor(currentUser.balance || 0); validateWithdrawInput(); }
+    });
+    on('copyContractBtn', () => {
+        navigator.clipboard?.writeText(CONFIG.tokenAddress);
+        showToast('Contract copied!', 'success');
+    });
+    
+    $('withdrawAmount')?.addEventListener('input', validateWithdrawInput);
+    
+    // Delegation for tasks, milestones, boost cards
+    document.addEventListener('click', e => {
+        const boost = e.target.closest('[data-boost]');
+        if (boost) { buyBoost(boost.dataset.boost); return; }
+        
+        const tb = e.target.closest('.task-btn[data-act]');
+        if (tb) {
+            const id = tb.closest('[data-task-id]')?.dataset.taskId;
+            if (id) taskAction(id, tb.dataset.act);
+            return;
+        }
+        
+        const ms = e.target.closest('[data-ms]');
+        if (ms) { claimMilestone(ms.dataset.ms); return; }
+    });
+}
+
+// ============================================================================
+// INIT
+// ============================================================================
+function init() {
+    console.log('🚀 Groyper Mine starting...');
+    
+    userId = tg?.initDataUnsafe?.user?.id?.toString() || new URLSearchParams(location.search).get('userId');
+    if (!userId) {
+        console.error('❌ No userId found');
+        showToast('Please open from Telegram', 'error');
+        return;
+    }
+    console.log('📱 User ID:', userId);
+    
+    // Init TonConnect FIRST
+    initTonConnect();
+    
+    // Bind UI events
+    bindEvents();
+    
+    // Boot: fetch user, config, etc.
+    boot().then(() => {
+        booted = true;
+        if (window.tonConnectUI?.wallet && !currentUser) {
+            // Wallet already connected but not registered
+            tonConnected = true;
+            tonWalletAddress = window.tonConnectUI.wallet.account.address;
+        }
+    });
+    
+    // Refresh price every 2 minutes
+    setInterval(() => {
+        if (!document.hidden && booted) fetchTokenPrice();
+    }, 120000);
+    
+    // Resync when visible after 60s
+    let lastVisible = Date.now();
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && booted && Date.now() - lastVisible > 60000) {
+            lastVisible = Date.now();
+            boot(true);
+        }
+    });
+}
+
+// Start when DOM ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
