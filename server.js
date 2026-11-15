@@ -1,5 +1,6 @@
 // ============================================================================
-// GROYPER MINE - SERVER v2.1 (Secure + Beautiful Welcome + Compatible with app.js)
+// GROYPER MINE - SERVER v3.0 (Clean, Complete, Error-Free)
+// Express + Telegraf (polling) + Firebase Admin
 // ============================================================================
 'use strict';
 
@@ -14,19 +15,26 @@ const admin = require('firebase-admin');
 const { Telegraf, Markup } = require('telegraf');
 
 // ============================================================================
-// 1. SECRETS & ENV
+// 1. ENV & SECRETS
 // ============================================================================
 const log = (...a) => console.log(new Date().toISOString(), ...a);
-const readSecret = f => { try { return fs.readFileSync('/etc/secrets/' + f, 'utf8').trim(); } catch { return null; } };
+
+const readSecret = (file) => {
+    try { return fs.readFileSync('/etc/secrets/' + file, 'utf8').trim(); }
+    catch { return null; }
+};
 
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const OWNER_WALLET = process.env.OWNER_WALLET;
 const APP_URL = (process.env.APP_URL || '').replace(/\/$/, '');
-const ADMIN_ID = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : (() => {
-    try { return String(JSON.parse(readSecret('admin-config.json')).admin_id); } catch { return null; }
-})();
 const TON_API_KEY = process.env.TON_API_KEY || readSecret('ton-api-key.txt') || '';
+const CRON_KEY = process.env.CRON_KEY || '';
+
+let ADMIN_ID = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : null;
+if (!ADMIN_ID) {
+    try { ADMIN_ID = String(JSON.parse(readSecret('admin-config.json')).admin_id); } catch {}
+}
 
 if (!BOT_TOKEN || !OWNER_WALLET || !APP_URL) {
     console.error('❌ Missing BOT_TOKEN / OWNER_WALLET / APP_URL');
@@ -37,16 +45,24 @@ if (!BOT_TOKEN || !OWNER_WALLET || !APP_URL) {
 // 2. FIREBASE
 // ============================================================================
 const saKey = readSecret('firebase-admin-key.json');
-if (!saKey) { console.error('❌ Missing /etc/secrets/firebase-admin-key.json'); process.exit(1); }
-if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(JSON.parse(saKey)) });
+if (!saKey) {
+    console.error('❌ Missing /etc/secrets/firebase-admin-key.json');
+    process.exit(1);
+}
+
+if (!admin.apps.length) {
+    admin.initializeApp({ credential: admin.credential.cert(JSON.parse(saKey)) });
+}
 const db = admin.firestore();
 const FV = admin.firestore.FieldValue;
-const inc = n => FV.increment(n);
-const userRef = id => db.collection('users').doc(String(id));
+const inc = (n) => FV.increment(n);
+const arrayUnion = (v) => FV.arrayUnion(v);
+const userRef = (id) => db.collection('users').doc(String(id));
+
 log('🔥 Firebase initialized');
 
 // ============================================================================
-// 3. CONFIG (overridable via Firestore settings/config)
+// 3. CONFIG (DEFAULTS)
 // ============================================================================
 const DEFAULTS = {
     symbol: 'GROYP',
@@ -55,15 +71,12 @@ const DEFAULTS = {
     groupUrl: 'https://t.me/communityGroyper',
     dexUrl: 'https://dedust.io/swap/TON/EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     botUsername: 'GroyperMinebot',
-    
-    // Economy
     miningReward: 20,
     cooldownMs: 6 * 3600e3,
     adsPerBatch: 10,
     adsReward: 20,
     adsCooldownMs: 6 * 3600e3,
     adsMinGapSec: 15,
-    adsRequirePostback: false,
     minWithdraw: 2000,
     feeTon: 0.1,
     minAccountAgeHours: 12,
@@ -83,40 +96,48 @@ const DEFAULTS = {
     },
     boostDays: 30,
     checkinRewards: [5, 10, 15, 20, 30, 40, 60],
-    
-    // Limits
     dailyCap: 0,
     miningEnabled: true,
     withdrawEnabled: true,
     maintenance: false,
-    banner: '',
-    remindersEnabled: false
+    banner: ''
 };
 
-const mem = new Map();
+const memCache = new Map();
 const cached = async (key, ttl, fn) => {
-    const c = mem.get(key);
+    const c = memCache.get(key);
     if (c && c.exp > Date.now()) return c.v;
     const v = await fn();
-    mem.set(key, { v, exp: Date.now() + ttl });
+    memCache.set(key, { v, exp: Date.now() + ttl });
     return v;
 };
-const bust = k => mem.delete(k);
+const bust = (k) => memCache.delete(k);
 
 const getConfig = () => cached('config', 60000, async () => {
     const s = await db.doc('settings/config').get();
     return { ...DEFAULTS, ...(s.exists ? s.data() : {}) };
 });
-const setConfig = async patch => { await db.doc('settings/config').set(patch, { merge: true }); bust('config'); };
-const publicConfig = c => ({
-    symbol: c.symbol, bot: c.botUsername, tokenAddress: c.tokenAddress,
-    miningReward: c.miningReward, cooldownMs: c.cooldownMs,
-    adsPerBatch: c.adsPerBatch, adsReward: c.adsReward, adsCooldownMs: c.adsCooldownMs,
-    minWithdraw: c.minWithdraw, feeTon: c.feeTon,
+
+const setConfig = async (patch) => {
+    await db.doc('settings/config').set(patch, { merge: true });
+    bust('config');
+};
+
+const publicConfig = (c) => ({
+    symbol: c.symbol,
+    bot: c.botUsername,
+    tokenAddress: c.tokenAddress,
+    tokenSymbol: c.symbol,
+    miningReward: c.miningReward,
+    cooldownMs: c.cooldownMs,
+    adsPerBatch: c.adsPerBatch,
+    adsReward: c.adsReward,
+    adsCooldownMs: c.adsCooldownMs,
+    minWithdraw: c.minWithdraw,
+    feeTon: c.feeTon,
     referralReward: c.referralReward,
     milestones: c.milestones,
-    boosts: c.boosts,
-    tokenSymbol: c.symbol
+    boosts: c.boosts
 });
 
 // ============================================================================
@@ -125,6 +146,7 @@ const publicConfig = c => ({
 const pend = {};
 const statInc = (k, n = 1) => { pend[k] = (pend[k] || 0) + n; };
 let daily = { day: '', amount: 0, unflushed: 0 };
+
 const dayKey = () => new Date().toISOString().slice(0, 10);
 
 async function flushStats() {
@@ -140,8 +162,9 @@ async function flushStats() {
             daily.unflushed = 0;
             await db.doc('stats_daily/' + daily.day).set({ amount: inc(n) }, { merge: true });
         }
-    } catch (e) { console.error('flushStats:', e.message); }
+    } catch (e) { log('flushStats:', e.message); }
 }
+
 setInterval(flushStats, 30000);
 
 async function dailyLoad() {
@@ -157,7 +180,11 @@ const capCheck = (cfg, n) => {
         throw new AppErr('Daily distribution limit reached. Try again tomorrow.');
     }
 };
-const capCommit = n => { daily.amount += n; daily.unflushed += n; statInc('distributed', n); };
+const capCommit = (n) => {
+    daily.amount += n;
+    daily.unflushed += n;
+    statInc('distributed', n);
+};
 
 // ============================================================================
 // 5. TASKS
@@ -172,30 +199,61 @@ const getTasks = () => cached('tasks', 300000, async () => {
     const s = await db.doc('settings/tasks').get();
     return s.exists && Array.isArray(s.data().list) ? s.data().list : DEFAULT_TASKS;
 });
-const saveTasks = async list => { await db.doc('settings/tasks').set({ list }); bust('tasks'); };
+
+const saveTasks = async (list) => {
+    await db.doc('settings/tasks').set({ list });
+    bust('tasks');
+};
 
 // ============================================================================
-// 6. PRICE (cached 60s)
+// 6. PRICE (cached 60s, source: DexScreener → CoinGecko fallback)
 // ============================================================================
 let lastPrice = { usd: 0, change: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
+
 const getPrice = () => cached('price', 60000, async () => {
+    // Try DexScreener first
     try {
-        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${DEFAULTS.tokenAddress}`, { signal: AbortSignal.timeout(8000) });
+        const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${DEFAULTS.tokenAddress}`, {
+            signal: AbortSignal.timeout(8000)
+        });
         const j = await r.json();
         const p = (j.pairs || []).sort((a, b) => (+b.liquidity?.usd || 0) - (+a.liquidity?.usd || 0))[0];
         if (p) {
             lastPrice = {
                 usd: +p.priceUsd || 0,
+                price: +p.priceUsd || 0,
                 change: +p.priceChange?.h24 || 0,
+                change24h: +p.priceChange?.h24 || 0,
                 mcap: +p.marketCap || 0,
                 fdv: +p.fdv || 0,
                 liq: +p.liquidity?.usd || 0,
-                vol: +p.volume?.h24 || 0,
-                change24h: +p.priceChange?.h24 || 0,
-                price: +p.priceUsd || 0
+                vol: +p.volume?.h24 || 0
+            };
+            return lastPrice;
+        }
+    } catch (e) { log('DexScreener failed:', e.message); }
+
+    // Fallback: CoinGecko
+    try {
+        const r = await fetch('https://api.coingecko.com/api/v3/coins/groyper-3?localization=false&tickers=false&community_data=false&developer_data=false', {
+            signal: AbortSignal.timeout(8000)
+        });
+        const j = await r.json();
+        if (j?.market_data) {
+            const md = j.market_data;
+            lastPrice = {
+                usd: md.current_price?.usd || 0,
+                price: md.current_price?.usd || 0,
+                change: md.price_change_percentage_24h || 0,
+                change24h: md.price_change_percentage_24h || 0,
+                mcap: md.market_cap?.usd || 0,
+                fdv: md.fully_diluted_valuation?.usd || 0,
+                liq: md.total_volume?.usd || 0,
+                vol: md.total_volume?.usd || 0
             };
         }
-    } catch (e) { log('price fetch failed:', e.message); }
+    } catch (e) { log('CoinGecko failed:', e.message); }
+
     return lastPrice;
 });
 
@@ -205,49 +263,66 @@ const getPrice = () => cached('price', 60000, async () => {
 class AppErr extends Error {
     constructor(m, code = 400) { super(m); this.code = code; }
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
 const safeEq = (a, b) => {
-    a = Buffer.from(String(a)); b = Buffer.from(String(b));
+    a = Buffer.from(String(a));
+    b = Buffer.from(String(b));
     return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
-const h = fn => (req, res) => fn(req, res).catch(e => {
+const h = (fn) => (req, res) => fn(req, res).catch((e) => {
     if (e instanceof AppErr) return res.status(e.code).json({ success: false, error: e.message });
-    console.error('ERR', req.method, req.path, e);
+    log('ERR', req.method, req.path, e.message);
     res.status(500).json({ success: false, error: 'Server error' });
 });
 
 // ============================================================================
 // 8. USER MODEL
 // ============================================================================
-const PUB = ['userId', 'username', 'firstName', 'wallet', 'walletRaw', 'balance',
-    'totalWithdrawn', 'totalEarned', 'lastMiningClaim', 'boostMultiplier', 'boostType',
-    'boostExpiresAt', 'adsCooldownUntil', 'adsWatched', 'completedTasks',
-    'activeReferrals', 'inactiveReferrals', 'claimedMilestones', 'streak',
-    'lastCheckinDay', 'isActive', 'withdrawFeePaid', 'createdAt'];
+const PUB = [
+    'userId', 'username', 'firstName', 'wallet',
+    'balance', 'totalWithdrawn', 'totalEarned',
+    'lastMiningClaim', 'boostMultiplier', 'boostType', 'boostExpiresAt',
+    'adsCooldownUntil', 'adsWatched', 'completedTasks',
+    'activeReferrals', 'inactiveReferrals', 'claimedMilestones',
+    'streak', 'lastCheckinDay', 'isActive', 'withdrawFeePaid', 'createdAt'
+];
 
-const pub = u => { const o = {}; for (const k of PUB) if (u[k] !== undefined) o[k] = u[k]; return o; };
+const pub = (u) => {
+    const o = {};
+    for (const k of PUB) if (u[k] !== undefined) o[k] = u[k];
+    return o;
+};
+
 const mult = (u, now = Date.now()) => (u.boostMultiplier > 1 && u.boostExpiresAt > now ? u.boostMultiplier : 1);
 
-const newUser = tg => ({
+const newUser = (tg) => ({
     userId: tg.id,
     username: tg.username || '',
     firstName: tg.first_name || 'User',
     wallet: '',
-    walletRaw: '',
-    balance: 0, totalWithdrawn: 0, totalEarned: 0,
+    balance: 0,
+    totalWithdrawn: 0,
+    totalEarned: 0,
     lastMiningClaim: 0,
-    boostMultiplier: 1, boostType: null, boostExpiresAt: 0,
-    adsCooldownUntil: 0, adsWatched: 0,
+    boostMultiplier: 1,
+    boostType: null,
+    boostExpiresAt: 0,
+    adsCooldownUntil: 0,
+    adsWatched: 0,
     completedTasks: [],
-    activeReferrals: 0, inactiveReferrals: 0,
+    activeReferrals: 0,
+    inactiveReferrals: 0,
     claimedMilestones: [],
     referredBy: null,
     isActive: false,
     withdrawFeePaid: false,
     pendingWd: 0,
-    streak: 0, lastCheckinDay: 0,
+    streak: 0,
+    lastCheckinDay: 0,
     banned: false,
     createdAt: Date.now()
 });
@@ -255,7 +330,7 @@ const newUser = tg => ({
 const notify = (id, text) => bot.telegram.sendMessage(id, text, { parse_mode: 'HTML' }).catch(() => {});
 
 // ============================================================================
-// 9. TELEGRAM AUTH (initData HMAC) + RATE LIMIT
+// 9. TELEGRAM AUTH
 // ============================================================================
 function verifyInitData(raw) {
     if (!raw) return null;
@@ -286,6 +361,7 @@ const rate = (id, max = 90) => {
     if (!e || e.r < n) { rl.set(id, { c: 1, r: n + 60000 }); return true; }
     return ++e.c <= max;
 };
+
 setInterval(() => {
     const n = Date.now();
     for (const [k, v] of rl) if (v.r < n) rl.delete(k);
@@ -317,15 +393,15 @@ async function tonGet(p) {
     return { status: r.status, json: await r.json().catch(() => null) };
 }
 
-const sha256 = b => crypto.createHash('sha256').update(b).digest();
-
 async function verifyPayment(it, boc) {
     let hash;
     try {
-        // Hash BOC via tonapi (avoids needing @ton/core locally)
         const r = await fetch('https://tonapi.io/v2/blockchain/message', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(TON_API_KEY ? { Authorization: 'Bearer ' + TON_API_KEY } : {}) },
+            headers: {
+                'Content-Type': 'application/json',
+                ...(TON_API_KEY ? { Authorization: 'Bearer ' + TON_API_KEY } : {})
+            },
             body: JSON.stringify({ boc })
         });
         const d = await r.json();
@@ -339,7 +415,8 @@ async function verifyPayment(it, boc) {
         if (r.status === 200 && r.json?.hash) tx = r.json;
         else await sleep(4000);
     }
-    if (!tx) throw new AppErr('Transaction not confirmed yet. Please try again in a moment.');
+
+    if (!tx) throw new AppErr('Transaction not confirmed yet. Please try again.');
     if (tx.success === false || tx.aborted) throw new AppErr('Transaction failed');
     if ((tx.utime || 0) * 1000 < it.createdAt - 60000) throw new AppErr('Transaction is older than request');
     if (!tx.in_msg) throw new AppErr('No payment message found');
@@ -353,16 +430,17 @@ async function verifyPayment(it, boc) {
     if (dest && dest.toLowerCase() !== OWNER_WALLET.toLowerCase()) {
         throw new AppErr('Payment destination mismatch');
     }
+
     return hash;
 }
 
 // ============================================================================
-// 11. BOT
+// 11. TELEGRAM BOT
 // ============================================================================
 const bot = new Telegraf(BOT_TOKEN);
 bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
 
-// ====================== BEAUTIFUL WELCOME ======================
+// ---- /start ----
 bot.start(async (ctx) => {
     try {
         const cfg = await getConfig();
@@ -370,14 +448,12 @@ bot.start(async (ctx) => {
         const name = ctx.from.first_name || 'Miner';
         const startParam = ctx.startPayload;
 
-        // Create user if not exists
-        let user = await userRef(uid).get();
-        if (!user.exists) {
+        const existing = await userRef(uid).get();
+        if (!existing.exists) {
             await userRef(uid).set(newUser(ctx.from));
             statInc('users');
         }
 
-        // Referral tracking
         if (startParam && startParam !== uid && /^\d{5,15}$/.test(startParam)) {
             const refSnap = await userRef(startParam).get();
             if (refSnap.exists) {
@@ -423,20 +499,20 @@ The <b>$${cfg.symbol}</b> token is <b>live & tradable</b> on multiple DEXs (DeDu
 
         await ctx.replyWithHTML(welcome, keyboard);
     } catch (e) {
-        console.error('Start error:', e);
+        log('Start error:', e.message);
         await ctx.reply('⚠️ Something went wrong. Please try again.');
     }
 });
 
-// ====================== ADMIN PANEL ======================
-const isAdmin = ctx => String(ctx.from?.id) === ADMIN_ID;
+// ---- ADMIN PANEL ----
+const isAdmin = (ctx) => String(ctx.from?.id) === ADMIN_ID;
 const sessions = new Map();
 
-async function panel() {
+async function buildAdminPanel() {
     const c = await getConfig();
     const s = (await db.doc('stats/global').get()).data() || {};
     const t = (k, l) => Markup.button.callback(`${c[k] ? '🟢' : '🔴'} ${l}`, 'a:tg:' + k);
-    
+
     return {
         text: `👑 <b>Admin Panel</b>\n\n` +
             `👥 Users: <b>${(s.users || 0).toLocaleString()}</b>\n` +
@@ -450,40 +526,44 @@ async function panel() {
             [Markup.button.callback('📋 Pending withdrawals', 'a:wd')],
             [Markup.button.callback('📝 Tasks', 'a:tasks'), Markup.button.callback('📢 Broadcast', 'a:bc')],
             [t('miningEnabled', 'Mining'), t('withdrawEnabled', 'Withdraw')],
-            [t('maintenance', 'Maintenance'), t('remindersEnabled', 'Reminders')],
+            [t('maintenance', 'Maintenance')],
             [Markup.button.callback('🔄 Refresh', 'a:home')]
         ])
     };
 }
 
-bot.command('admin', async ctx => {
+bot.command('admin', async (ctx) => {
     if (!isAdmin(ctx)) return ctx.reply('⛔ Access Denied');
-    const p = await panel();
+    const p = await buildAdminPanel();
     ctx.replyWithHTML(p.text, p.kb);
 });
 
-bot.command('cancel', ctx => {
-    if (isAdmin(ctx)) { sessions.delete(ADMIN_ID); ctx.reply('Cancelled.'); }
+bot.command('cancel', (ctx) => {
+    if (!isAdmin(ctx)) return;
+    sessions.delete(ADMIN_ID);
+    ctx.reply('Cancelled.');
 });
 
-bot.command('set', async ctx => {
+bot.command('set', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const [, k, v] = ctx.message.text.split(/\s+/);
     const keys = ['miningReward', 'adsReward', 'referralReward', 'minWithdraw', 'feeTon',
         'minAccountAgeHours', 'maxPendingWd', 'dailyCap', 'adsMinGapSec', 'boostDays'];
-    if (!keys.includes(k) || isNaN(+v)) return ctx.reply('Usage: /set <key> <number>\nKeys: ' + keys.join(', '));
+    if (!keys.includes(k) || isNaN(+v)) {
+        return ctx.reply('Usage: /set <key> <number>\nKeys: ' + keys.join(', '));
+    }
     await setConfig({ [k]: +v });
     ctx.reply(`✅ ${k} = ${+v}`);
 });
 
-bot.command('banner', async ctx => {
+bot.command('banner', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const t = ctx.message.text.replace(/^\/banner\s*/, '');
     await setConfig({ banner: t });
     ctx.reply(t ? '✅ Banner set' : '✅ Banner cleared');
 });
 
-bot.command('user', async ctx => {
+bot.command('user', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const id = ctx.message.text.split(/\s+/)[1];
     if (!id) return ctx.reply('/user <id>');
@@ -502,61 +582,72 @@ bot.command('user', async ctx => {
     );
 });
 
-// ====================== ADMIN ACTIONS ======================
-bot.action(/^a:(\w+)(?::(.+))?$/, async ctx => {
+// ---- Admin actions ----
+bot.action(/^a:(\w+)(?::(.+))?$/, async (ctx) => {
     if (!isAdmin(ctx)) return ctx.answerCbQuery('⛔');
     const [, act, arg] = ctx.match;
     await ctx.answerCbQuery().catch(() => {});
-    
+
     try {
         if (act === 'home') {
-            const p = await panel();
+            const p = await buildAdminPanel();
             return ctx.editMessageText(p.text, { parse_mode: 'HTML', ...p.kb }).catch(() => {});
         }
         if (act === 'tg') {
             const c = await getConfig();
             await setConfig({ [arg]: !c[arg] });
-            const p = await panel();
+            const p = await buildAdminPanel();
             return ctx.editMessageText(p.text, { parse_mode: 'HTML', ...p.kb }).catch(() => {});
         }
         if (act === 'wd') {
-            const snap = await db.collection('withdrawals').where('status', '==', 'pending').orderBy('createdAt', 'asc').limit(5).get();
+            // ⚠️ NO orderBy → NO index needed
+            const snap = await db.collection('withdrawals')
+                .where('status', '==', 'pending')
+                .limit(10)
+                .get();
             if (snap.empty) return ctx.reply('✅ No pending withdrawals');
-            for (const d of snap.docs) {
-                const w = d.data();
+
+            const sorted = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .sort((a, b) => a.createdAt - b.createdAt);
+
+            for (const w of sorted.slice(0, 5)) {
                 await ctx.replyWithHTML(
-                    `💸 <b>${w.amount.toLocaleString()} $GROYP</b>\n👤 @${esc(w.username || '')}\n💳 <code>${w.wallet || w.walletAddress}</code>`,
+                    `💸 <b>${w.amount.toLocaleString()} $GROYP</b>\n` +
+                    `👤 @${esc(w.username || '')}\n` +
+                    `💳 <code>${w.wallet || w.walletAddress || '-'}</code>\n` +
+                    `📅 ${new Date(w.createdAt).toLocaleString()}`,
                     Markup.inlineKeyboard([[
-                        Markup.button.callback('✅ Approve', 'a:wp:' + d.id),
-                        Markup.button.callback('❌ Reject', 'a:wr:' + d.id)
+                        Markup.button.callback('✅ Approve', 'a:wp:' + w.id),
+                        Markup.button.callback('❌ Reject', 'a:wr:' + w.id)
                     ]])
                 );
             }
             return;
         }
-        if (act === 'wp' || act === 'wr') {
-            const status = act === 'wp' ? 'paid' : 'rejected';
-            const d = await db.runTransaction(async tx => {
+        if (act === 'wp') {
+            const d = await db.runTransaction(async (tx) => {
                 const wr = db.collection('withdrawals').doc(arg);
                 const w = await tx.get(wr);
                 if (!w.exists) throw new Error('Not found');
                 const x = w.data();
                 if (x.status !== 'pending') throw new Error('Already ' + x.status);
-                tx.update(wr, { status, settledAt: Date.now() });
-                if (status === 'paid') {
-                    tx.set(userRef(x.userId), { totalWithdrawn: inc(x.amount), pendingWd: inc(-1) }, { merge: true });
-                } else {
-                    tx.set(userRef(x.userId), { balance: inc(x.amount), pendingWd: inc(-1) }, { merge: true });
-                }
+                tx.update(wr, { status: 'approved', approvedAt: Date.now() });
+                tx.set(userRef(x.userId), {
+                    totalWithdrawn: inc(x.amount),
+                    pendingWd: inc(-1)
+                }, { merge: true });
                 return x;
             });
             statInc('pendingCount', -1);
             statInc('pendingAmount', -d.amount);
-            if (status === 'paid') statInc('withdrawnTotal', d.amount);
-            notify(d.userId, status === 'paid'
-                ? `✅ Your withdrawal of <b>${d.amount}</b> has been sent!`
-                : `❌ Your withdrawal of <b>${d.amount}</b> was rejected. Funds returned.`);
-            return ctx.reply(`✅ ${status.toUpperCase()}`);
+            statInc('withdrawnTotal', d.amount);
+            notify(d.userId, `✅ Your withdrawal of <b>${d.amount} ${DEFAULTS.symbol}</b> has been approved! Funds will be sent shortly.`);
+            return ctx.reply(`✅ Approved: ${d.amount} → @${d.username}`);
+        }
+        if (act === 'wr') {
+            sessions.set(ADMIN_ID, { step: 'reject_reason', withdrawalId: arg });
+            return ctx.reply('📝 Send the rejection reason (will be sent to the user):');
         }
         if (act === 'tasks') {
             const tasks = await getTasks();
@@ -569,8 +660,8 @@ bot.action(/^a:(\w+)(?::(.+))?$/, async ctx => {
             ]));
         }
         if (act === 'td') {
-            const l = (await getTasks()).filter(t => t.id !== arg);
-            await saveTasks(l);
+            const list = (await getTasks()).filter(t => t.id !== arg);
+            await saveTasks(list);
             return ctx.reply('✅ Deleted');
         }
         if (act === 'ta') {
@@ -628,14 +719,46 @@ async function broadcast(text) {
         }
         last = snap.docs[snap.docs.length - 1];
     }
-    notify(ADMIN_ID, `✅ Broadcast done: ${sent} sent, ${failed} failed.`);
+    notify(ADMIN_ID, `✅ Broadcast: ${sent} sent, ${failed} failed.`);
 }
 
-bot.on('text', async ctx => {
+bot.on('text', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const s = sessions.get(ADMIN_ID);
     if (!s) return;
     const t = ctx.message.text;
+
+    // Reject with reason
+    if (s.step === 'reject_reason') {
+        const reason = t.trim().slice(0, 200);
+        const wId = s.withdrawalId;
+        sessions.delete(ADMIN_ID);
+        try {
+            const d = await db.runTransaction(async (tx) => {
+                const wr = db.collection('withdrawals').doc(wId);
+                const w = await tx.get(wr);
+                if (!w.exists) throw new Error('Not found');
+                const x = w.data();
+                if (x.status !== 'pending') throw new Error('Already ' + x.status);
+                tx.update(wr, { status: 'rejected', rejectReason: reason, rejectedAt: Date.now() });
+                tx.set(userRef(x.userId), {
+                    balance: inc(x.amount),
+                    pendingWd: inc(-1)
+                }, { merge: true });
+                return x;
+            });
+            statInc('pendingCount', -1);
+            statInc('pendingAmount', -d.amount);
+            notify(d.userId,
+                `❌ Your withdrawal of <b>${d.amount} ${DEFAULTS.symbol}</b> was rejected.\n\n<b>Reason:</b> ${esc(reason)}\n\nFunds returned to your balance.`
+            );
+            await ctx.reply(`✅ Rejected: ${d.amount}\nReason: ${reason}`);
+        } catch (e) {
+            await ctx.reply('⚠️ Error: ' + e.message);
+        }
+        return;
+    }
+
     if (s.step === 'tname') { s.name = t.slice(0, 60); s.step = 'turl'; return ctx.reply('Task URL (https://...):'); }
     if (s.step === 'turl') {
         if (!/^https:\/\//.test(t)) return ctx.reply('❌ Must start with https://');
@@ -658,12 +781,12 @@ bot.on('text', async ctx => {
     }
     if (s.step === 'bc') {
         sessions.delete(ADMIN_ID);
-        ctx.reply('⏳ Broadcasting in background...');
+        ctx.reply('⏳ Broadcasting...');
         broadcast(t).catch(e => notify(ADMIN_ID, 'Broadcast error: ' + e.message));
     }
 });
 
-bot.catch((e, ctx) => console.error('BOT ERR', ctx?.updateType, e.message));
+bot.catch((e, ctx) => log('BOT ERR', ctx?.updateType, e.message));
 
 // ============================================================================
 // 12. EXPRESS APP
@@ -674,16 +797,22 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false,
 app.use(cors({ origin: APP_URL }));
 app.use(express.json({ limit: '100kb' }));
 
-// ---- Static files (with cache headers) ----
-const FILES = { '/': 'index.html', '/index.html': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css' };
+// Static files
+const FILES = {
+    '/': 'index.html',
+    '/index.html': 'index.html',
+    '/app.js': 'app.js',
+    '/style.css': 'style.css'
+};
+
 app.get(Object.keys(FILES), (req, res) => {
-    res.set('Cache-Control', req.path === '/' || req.path === '/index.html' ? 'no-cache' : 'public, max-age=300');
+    res.set('Cache-Control',
+        req.path === '/' || req.path === '/index.html' ? 'no-cache' : 'public, max-age=300');
     res.sendFile(path.join(__dirname, FILES[req.path]));
 });
 
 app.get('/health', (_, res) => res.send('ok'));
 
-// ---- TonConnect manifest ----
 app.get('/tonconnect-manifest.json', (_, res) => res.json({
     url: APP_URL,
     name: 'Groyper Mine',
@@ -692,8 +821,8 @@ app.get('/tonconnect-manifest.json', (_, res) => res.json({
     privacyPolicyUrl: APP_URL + '/privacy'
 }));
 
-app.get('/terms', (_, res) => res.send('<h1>Terms</h1><p>Groyper Mine rewards are community incentives, not an investment offer. No guarantee of value. Abuse, bots or multi-accounting may lead to a ban.</p>'));
-app.get('/privacy', (_, res) => res.send('<h1>Privacy</h1><p>We store your Telegram ID, username, wallet address and in-app activity to run the service. We never access your wallet keys.</p>'));
+app.get('/terms', (_, res) => res.send('<h1>Terms</h1><p>Community incentives only. No investment offer.</p>'));
+app.get('/privacy', (_, res) => res.send('<h1>Privacy</h1><p>We store Telegram ID, username, wallet, and in-app activity. We never access your keys.</p>'));
 
 // ============================================================================
 // 13. API ROUTES
@@ -701,7 +830,7 @@ app.get('/privacy', (_, res) => res.send('<h1>Privacy</h1><p>We store your Teleg
 const api = express.Router();
 api.use(authMw);
 
-// ---- Init (1 read on open) ----
+// ---- Init ----
 api.get('/init', h(async (req, res) => {
     const [cfg, tasks, price, snap] = await Promise.all([
         getConfig(), getTasks(), getPrice(), userRef(req.tg.id).get()
@@ -721,18 +850,19 @@ api.get('/init', h(async (req, res) => {
 
 api.get('/price', h(async (req, res) => res.json({ success: true, price: await getPrice() })));
 
-// ---- Register (simple wallet link — NO ton_proof for now, matches app.js) ----
+// ---- Register ----
 api.post('/register', h(async (req, res) => {
     const tg = req.tg;
     const { wallet, startParam } = req.body || {};
     if (!wallet || typeof wallet !== 'string' || wallet.length < 10) {
         throw new AppErr('Invalid wallet address');
     }
-    
-    const uRef = userRef(tg.id);
+
     let created = false;
-    const user = await db.runTransaction(async tx => {
+    const user = await db.runTransaction(async (tx) => {
+        const uRef = userRef(tg.id);
         const us = await tx.get(uRef);
+
         if (us.exists) {
             const u = us.data();
             if (u.banned) throw new AppErr('Account banned', 403);
@@ -742,9 +872,9 @@ api.post('/register', h(async (req, res) => {
             }
             return u;
         }
-        
-        // New user
+
         const u = { ...newUser(tg), wallet };
+
         if (startParam && startParam !== tg.id && /^\d{5,15}$/.test(startParam)) {
             const refSnap = await tx.get(userRef(startParam));
             if (refSnap.exists) {
@@ -757,43 +887,46 @@ api.post('/register', h(async (req, res) => {
                 tx.set(userRef(startParam), { inactiveReferrals: inc(1) }, { merge: true });
             }
         }
+
         tx.set(uRef, u);
         created = true;
         return u;
     });
-    
+
     if (created) statInc('users');
     res.json({ success: true, user: pub(user) });
 }));
 
-// ---- Mining claim (transaction, live) ----
+// ---- Mining ----
 api.post('/mining/claim', h(async (req, res) => {
     const cfg = await getConfig();
     if (!cfg.miningEnabled) throw new AppErr('Mining is temporarily paused');
     await dailyLoad();
+
     const id = req.tg.id;
-    const ref = userRef(id);
     const nowMs = Date.now();
     let refInfo = null;
-    
-    const out = await db.runTransaction(async tx => {
+
+    const out = await db.runTransaction(async (tx) => {
         refInfo = null;
+        const ref = userRef(id);
         const s = await tx.get(ref);
         if (!s.exists) throw new AppErr('User not found');
+
         const u = s.data();
         if (u.banned) throw new AppErr('Account banned', 403);
         if (nowMs - (u.lastMiningClaim || 0) < cfg.cooldownMs - 3000) throw new AppErr('Not ready yet');
-        
+
         const reward = cfg.miningReward * mult(u, nowMs);
         capCheck(cfg, reward);
-        
+
         tx.update(ref, {
             balance: inc(reward),
             totalEarned: inc(reward),
             lastMiningClaim: nowMs,
             isActive: true
         });
-        
+
         if (!u.isActive && u.referredBy) {
             const rr = userRef(u.referredBy);
             tx.set(rr, {
@@ -805,6 +938,7 @@ api.post('/mining/claim', h(async (req, res) => {
             tx.set(rr.collection('referrals').doc(id), { active: true }, { merge: true });
             refInfo = { to: u.referredBy, name: u.username || u.firstName };
         }
+
         return {
             reward,
             user: {
@@ -816,7 +950,7 @@ api.post('/mining/claim', h(async (req, res) => {
             }
         };
     });
-    
+
     capCommit(out.reward);
     statInc('claims');
     if (refInfo) {
@@ -826,24 +960,23 @@ api.post('/mining/claim', h(async (req, res) => {
     res.json({ success: true, reward: out.reward, user: pub(out.user) });
 }));
 
-// ---- Ads (stateful in DB, works with app.js token logic) ----
+// ---- Ads ----
 api.post('/ads/start', h(async (req, res) => {
     const cfg = await getConfig();
     const id = req.tg.id;
     const nowMs = Date.now();
-    
+
     const s = await userRef(id).get();
     if (!s.exists) throw new AppErr('User not found');
     const u = s.data();
     if (u.banned) throw new AppErr('Account banned', 403);
-    
+
     const watched = u.adsWatched || 0;
     const cooldownUntil = u.adsCooldownUntil || 0;
-    
+
     if (nowMs < cooldownUntil) throw new AppErr('Ads are on cooldown');
     if (watched >= cfg.adsPerBatch) throw new AppErr('Batch complete. Claim your reward first.');
-    
-    // Simple ymid (stored in DB for reliability)
+
     const ymid = crypto.randomBytes(16).toString('hex');
     await db.collection('ads_pending').doc(ymid).set({
         userId: id,
@@ -851,7 +984,7 @@ api.post('/ads/start', h(async (req, res) => {
         completed: false
     });
     setTimeout(() => db.collection('ads_pending').doc(ymid).delete().catch(() => {}), 600000);
-    
+
     res.json({ success: true, ymid, token: ymid });
 }));
 
@@ -861,28 +994,28 @@ api.post('/ads/watch', h(async (req, res) => {
     const nowMs = Date.now();
     const { ymid } = req.body || {};
     if (!ymid || typeof ymid !== 'string') throw new AppErr('Missing ymid');
-    
+
     const ref = db.collection('ads_pending').doc(ymid);
     const snap = await ref.get();
     if (!snap.exists) throw new AppErr('Invalid ad session');
     const p = snap.data();
     if (p.userId !== id) throw new AppErr('Wrong user');
     if (p.completed) throw new AppErr('Already used');
-    
+
     const age = nowMs - p.createdAt;
     if (age > 600000) throw new AppErr('Ad session expired');
     if (age < cfg.adsMinGapSec * 1000) throw new AppErr('Ad was not completed');
-    
+
     const s = await userRef(id).get();
     if (!s.exists) throw new AppErr('User not found');
     const u = s.data();
     if (nowMs < (u.adsCooldownUntil || 0)) throw new AppErr('Ads are on cooldown');
     if ((u.adsWatched || 0) >= cfg.adsPerBatch) throw new AppErr('Batch complete');
-    
+
     await ref.update({ completed: true });
     await userRef(id).update({ adsWatched: inc(1) });
     const fresh = await userRef(id).get();
-    
+
     res.json({ success: true, watched: fresh.data().adsWatched, token: ymid });
 }));
 
@@ -890,16 +1023,16 @@ api.post('/ads/claim', h(async (req, res) => {
     const cfg = await getConfig();
     await dailyLoad();
     const id = req.tg.id;
-    const ref = userRef(id);
     const nowMs = Date.now();
-    
-    const out = await db.runTransaction(async tx => {
+
+    const out = await db.runTransaction(async (tx) => {
+        const ref = userRef(id);
         const s = await tx.get(ref);
         if (!s.exists) throw new AppErr('User not found');
         const u = s.data();
         if (u.banned) throw new AppErr('Account banned', 403);
         if ((u.adsWatched || 0) < cfg.adsPerBatch) throw new AppErr('Watch all ads first');
-        
+
         capCheck(cfg, cfg.adsReward);
         const until = nowMs + cfg.adsCooldownMs;
         tx.update(ref, {
@@ -916,7 +1049,7 @@ api.post('/ads/claim', h(async (req, res) => {
             adsCooldownUntil: until
         };
     });
-    
+
     capCommit(cfg.adsReward);
     res.json({ success: true, reward: cfg.adsReward, user: pub(out) });
 }));
@@ -926,16 +1059,16 @@ api.post('/checkin', h(async (req, res) => {
     const cfg = await getConfig();
     await dailyLoad();
     const id = req.tg.id;
-    const ref = userRef(id);
     const day = Math.floor(Date.now() / 86400e3);
-    
-    const out = await db.runTransaction(async tx => {
+
+    const out = await db.runTransaction(async (tx) => {
+        const ref = userRef(id);
         const s = await tx.get(ref);
         if (!s.exists) throw new AppErr('User not found');
         const u = s.data();
         if (u.banned) throw new AppErr('Account banned', 403);
         if (u.lastCheckinDay === day) throw new AppErr('Already checked in today');
-        
+
         const streak = u.lastCheckinDay === day - 1 ? (u.streak || 0) + 1 : 1;
         const reward = cfg.checkinRewards[(streak - 1) % cfg.checkinRewards.length];
         capCheck(cfg, reward);
@@ -956,7 +1089,7 @@ api.post('/checkin', h(async (req, res) => {
             }
         };
     });
-    
+
     capCommit(out.reward);
     res.json({ success: true, reward: out.reward, user: pub(out.user) });
 }));
@@ -969,7 +1102,7 @@ api.post('/tasks/verify', h(async (req, res) => {
     const taskId = String(req.body?.taskId || '');
     const task = (await getTasks()).find(t => t.id === taskId);
     if (!task) throw new AppErr('Task not found');
-    
+
     if (task.verify === 'chat') {
         let ok = false;
         try {
@@ -978,22 +1111,19 @@ api.post('/tasks/verify', h(async (req, res) => {
                  (m.status === 'restricted' && m.is_member);
         } catch (e) { log('getChatMember:', e.message); }
         if (!ok) throw new AppErr('Please join first, then press Verify');
-    } else {
-        // For delay tasks, give immediate reward (app.js doesn't implement timer)
-        // The 20s delay is enforced client-side
     }
-    
-    const ref = userRef(id);
-    const out = await db.runTransaction(async tx => {
+
+    const out = await db.runTransaction(async (tx) => {
+        const ref = userRef(id);
         const s = await tx.get(ref);
         if (!s.exists) throw new AppErr('User not found');
         const u = s.data();
         if (u.banned) throw new AppErr('Account banned', 403);
         if ((u.completedTasks || []).includes(taskId)) throw new AppErr('Already completed');
         capCheck(cfg, task.reward);
-        
+
         tx.update(ref, {
-            completedTasks: FV.arrayUnion(taskId),
+            completedTasks: arrayUnion(taskId),
             balance: inc(task.reward),
             totalEarned: inc(task.reward)
         });
@@ -1004,7 +1134,7 @@ api.post('/tasks/verify', h(async (req, res) => {
             totalEarned: (u.totalEarned || 0) + task.reward
         };
     });
-    
+
     capCommit(task.reward);
     res.json({ success: true, reward: task.reward, user: pub(out) });
 }));
@@ -1024,21 +1154,21 @@ api.get('/referrals', h(async (req, res) => {
 api.post('/referrals/milestone', h(async (req, res) => {
     const cfg = await getConfig();
     const id = req.tg.id;
-    const ref = userRef(id);
     const count = +req.body?.count;
     const m = cfg.milestones.find(x => x.count === count);
     if (!m) throw new AppErr('Invalid milestone');
-    
-    const out = await db.runTransaction(async tx => {
+
+    const out = await db.runTransaction(async (tx) => {
+        const ref = userRef(id);
         const s = await tx.get(ref);
         if (!s.exists) throw new AppErr('User not found');
         const u = s.data();
         if (u.banned) throw new AppErr('Account banned', 403);
         if ((u.claimedMilestones || []).includes(count)) throw new AppErr('Already claimed');
         if ((u.activeReferrals || 0) < count) throw new AppErr('Not enough active referrals');
-        
+
         tx.update(ref, {
-            claimedMilestones: FV.arrayUnion(count),
+            claimedMilestones: arrayUnion(count),
             balance: inc(m.reward),
             totalEarned: inc(m.reward)
         });
@@ -1049,36 +1179,50 @@ api.post('/referrals/milestone', h(async (req, res) => {
             totalEarned: (u.totalEarned || 0) + m.reward
         };
     });
-    
+
     statInc('distributed', m.reward);
     res.json({ success: true, reward: m.reward, user: pub(out) });
 }));
 
 // ---- Withdrawals ----
+// ⚠️ NO orderBy → NO composite index required
 api.get('/withdrawals', h(async (req, res) => {
-    let q = db.collection('withdrawals')
-        .where('userId', '==', req.tg.id)
-        .orderBy('createdAt', 'desc')
-        .limit(10);
-    if (req.query.cursor) q = q.startAfter(Number(req.query.cursor));
-    const snap = await q.get();
-    const items = snap.docs.map(d => {
-        const x = d.data();
-        return { id: x.id || d.id, amount: x.amount, status: x.status, createdAt: x.createdAt };
-    });
-    res.json({ success: true, items, cursor: snap.size === 10 ? snap.docs[9].data().createdAt : null });
+    try {
+        const snap = await db.collection('withdrawals')
+            .where('userId', '==', req.tg.id)
+            .limit(20)
+            .get();
+
+        const items = snap.docs
+            .map(d => {
+                const x = d.data();
+                return {
+                    id: d.id,
+                    amount: x.amount,
+                    status: x.status,
+                    createdAt: x.createdAt
+                };
+            })
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 10);
+
+        res.json({ success: true, items, cursor: null });
+    } catch (e) {
+        log('withdrawals error:', e.message);
+        res.json({ success: true, items: [], cursor: null });
+    }
 }));
 
 api.post('/withdraw/intent', h(async (req, res) => {
     const cfg = await getConfig();
     if (!cfg.withdrawEnabled) throw new AppErr('Withdrawals are temporarily paused');
-    
+
     const id = req.tg.id;
     const amount = Math.floor(Number(req.body?.amount));
     const nowMs = Date.now();
-    
+
     if (!(amount >= cfg.minWithdraw)) throw new AppErr('Minimum withdrawal is ' + cfg.minWithdraw);
-    
+
     const s = await userRef(id).get();
     if (!s.exists) throw new AppErr('User not found');
     const u = s.data();
@@ -1090,7 +1234,7 @@ api.post('/withdraw/intent', h(async (req, res) => {
         throw new AppErr(`Withdrawals unlock ${cfg.minAccountAgeHours}h after registration`);
     }
     if ((u.pendingWd || 0) >= cfg.maxPendingWd) throw new AppErr('Too many pending withdrawals');
-    
+
     const feeRequired = !u.withdrawFeePaid;
     const ref = db.collection('intents').doc();
     const it = {
@@ -1105,7 +1249,7 @@ api.post('/withdraw/intent', h(async (req, res) => {
         expiresAt: nowMs + 600000
     };
     await ref.set(it);
-    
+
     res.json({
         success: true,
         requestId: ref.id,
@@ -1125,13 +1269,13 @@ api.post('/withdraw/confirm', h(async (req, res) => {
     if (!it || it.userId !== id || it.kind !== 'withdraw' || it.status !== 'open' || it.expiresAt < Date.now()) {
         throw new AppErr('Request expired. Please start again.');
     }
-    
+
     let hash = null;
     if (it.feeRequired) {
         hash = await verifyPayment(it, String(req.body?.boc || ''));
     }
-    
-    const user = await db.runTransaction(async tx => {
+
+    const user = await db.runTransaction(async (tx) => {
         const uRef = userRef(id);
         const [us, is2, ps] = await Promise.all([
             tx.get(uRef),
@@ -1140,12 +1284,12 @@ api.post('/withdraw/confirm', h(async (req, res) => {
         ]);
         if (is2.data()?.status !== 'open') throw new AppErr('Request already processed');
         if (ps?.exists) throw new AppErr('Payment already used');
-        
+
         const u = us.data();
         if (u.banned) throw new AppErr('Account banned', 403);
         if (it.amount > (u.balance || 0)) throw new AppErr('Insufficient balance');
         if ((u.pendingWd || 0) >= cfg.maxPendingWd) throw new AppErr('Too many pending withdrawals');
-        
+
         const wRef = db.collection('withdrawals').doc();
         tx.set(wRef, {
             id: wRef.id,
@@ -1165,27 +1309,17 @@ api.post('/withdraw/confirm', h(async (req, res) => {
         });
         return { ...u, balance: (u.balance || 0) - it.amount, withdrawFeePaid: true };
     });
-    
+
     statInc('pendingCount');
     statInc('pendingAmount', it.amount);
     if (hash) statInc('tonRevenue', it.amountTon);
-    
+
     if (ADMIN_ID) {
-        const w = (await db.collection('withdrawals').where('userId', '==', id).orderBy('createdAt', 'desc').limit(1).get()).docs[0]?.data();
-        if (w) {
-            bot.telegram.sendMessage(ADMIN_ID,
-                `💸 <b>Withdrawal</b>\n\n👤 @${esc(user.username || '')}\n💰 ${it.amount.toLocaleString()} ${cfg.symbol}\n💳 <code>${user.wallet}</code>`,
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: Markup.inlineKeyboard([[
-                        Markup.button.callback('✅ Approve', 'a:wp:' + w.id),
-                        Markup.button.callback('❌ Reject', 'a:wr:' + w.id)
-                    ]]).reply_markup
-                }
-            ).catch(() => {});
-        }
+        notify(ADMIN_ID,
+            `💸 <b>New Withdrawal</b>\n\n👤 @${esc(user.username || '')}\n💰 ${it.amount.toLocaleString()} ${cfg.symbol}\n💳 <code>${user.wallet}</code>\n\nUse /admin → 📋 Pending withdrawals`
+        );
     }
-    
+
     res.json({ success: true, user: pub(user) });
 }));
 
@@ -1197,14 +1331,14 @@ api.post('/boost/intent', h(async (req, res) => {
     const type = String(req.body?.type || '');
     const b = cfg.boosts[type];
     if (!b) throw new AppErr('Invalid boost');
-    
+
     const s = await userRef(id).get();
     if (!s.exists) throw new AppErr('User not found');
     const u = s.data();
     if (u.banned) throw new AppErr('Account banned', 403);
     if (!u.wallet) throw new AppErr('Connect your wallet first');
     if (mult(u, nowMs) > b.mult) throw new AppErr('You already have a stronger active boost');
-    
+
     const ref = db.collection('intents').doc();
     await ref.set({
         userId: id,
@@ -1216,7 +1350,7 @@ api.post('/boost/intent', h(async (req, res) => {
         createdAt: nowMs,
         expiresAt: nowMs + 600000
     });
-    
+
     res.json({
         success: true,
         requestId: ref.id,
@@ -1235,13 +1369,13 @@ api.post('/boost/confirm', h(async (req, res) => {
     if (!it || it.userId !== id || it.kind !== 'boost' || it.status !== 'open' || it.expiresAt < Date.now()) {
         throw new AppErr('Request expired. Please start again.');
     }
-    
+
     const b = cfg.boosts[it.type];
     if (!b) throw new AppErr('Invalid boost');
     const hash = await verifyPayment(it, String(req.body?.boc || ''));
     const exp = Date.now() + cfg.boostDays * 86400e3;
-    
-    const user = await db.runTransaction(async tx => {
+
+    const user = await db.runTransaction(async (tx) => {
         const uRef = userRef(id);
         const [us, is2, ps] = await Promise.all([
             tx.get(uRef),
@@ -1250,7 +1384,7 @@ api.post('/boost/confirm', h(async (req, res) => {
         ]);
         if (is2.data()?.status !== 'open') throw new AppErr('Request already processed');
         if (ps.exists) throw new AppErr('Payment already used');
-        
+
         tx.update(uRef, {
             boostMultiplier: b.mult,
             boostType: it.type,
@@ -1260,12 +1394,12 @@ api.post('/boost/confirm', h(async (req, res) => {
         tx.set(db.doc('used_payments/' + hash), { userId: id, kind: 'boost', at: Date.now() });
         return { ...us.data(), boostMultiplier: b.mult, boostType: it.type, boostExpiresAt: exp };
     });
-    
+
     statInc('tonRevenue', it.amountTon);
     res.json({ success: true, user: pub(user) });
 }));
 
-// ---- Leaderboard (cached, built by cron) ----
+// ---- Leaderboard ----
 api.get('/leaderboard', h(async (req, res) => {
     const d = await cached('lb', 300000, async () => {
         const s = await db.doc('leaderboard/top100').get();
@@ -1279,8 +1413,7 @@ app.use('/api', api);
 // ============================================================================
 // 14. CRON ENDPOINTS
 // ============================================================================
-const CRON_KEY = process.env.CRON_KEY || '';
-const cron = fn => h(async (req, res) => {
+const cron = (fn) => h(async (req, res) => {
     if (!CRON_KEY || !safeEq(String(req.query.key || ''), CRON_KEY)) {
         return res.status(403).json({ success: false });
     }
@@ -1308,7 +1441,7 @@ app.get('/cron/cleanup', cron(async () => {
 
 app.use((req, res) => res.status(404).json({ success: false, error: 'Not found' }));
 app.use((e, req, res, next) => {
-    console.error('EXPRESS:', e.message);
+    log('EXPRESS:', e.message);
     res.status(500).json({ success: false, error: 'Server error' });
 });
 
@@ -1319,10 +1452,10 @@ async function initDefaults() {
     try {
         const cfgDoc = await db.doc('settings/config').get();
         if (!cfgDoc.exists) await db.doc('settings/config').set(DEFAULTS);
-        
+
         const tasksDoc = await db.doc('settings/tasks').get();
         if (!tasksDoc.exists) await db.doc('settings/tasks').set({ list: DEFAULT_TASKS });
-        
+
         log('✅ Defaults initialized');
     } catch (e) {
         log('Init error:', e.message);
@@ -1334,12 +1467,11 @@ const server = app.listen(PORT, async () => {
     log(`🚀 Groyper Mine listening on ${PORT}`);
 });
 
-// Bot launch with polling (safer than webhook on Render free tier)
 bot.launch({ dropPendingUpdates: true })
     .then(() => log('🤖 Bot started (polling)'))
-    .catch(err => console.error('❌ Bot error:', err.message));
+    .catch(err => log('Bot error:', err.message));
 
-process.on('unhandledRejection', e => console.error('UNHANDLED:', e));
+process.on('unhandledRejection', (e) => log('UNHANDLED:', e?.message || e));
 process.on('SIGTERM', async () => {
     log('SIGTERM received');
     await flushStats();
