@@ -5,26 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Groyper Mine | Ember Vault</title>
 
+    <!-- Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- TON Connect -->
     <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    
+    <!-- Ad Networks -->
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
     <script src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"></script>
 
+    <!-- Fonts & Icons -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom CSS -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
     <canvas id="embersCanvas"></canvas>
 
-    <!-- ONBOARDING -->
+    <!-- Onboarding Screen -->
     <div id="onboardingScreen" class="screen active">
         <div class="onboarding-content">
-            <img src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553" alt="GROYP" class="onboarding-logo">
+            <img src="https://assets.coingecko.com/coins/images/102172192/standard/Untitled_design__12_-removebg-preview.png?1772078553" alt="GROYP Logo" class="onboarding-logo">
             <h1 class="onboarding-title">Ignite Your Fire</h1>
             <p class="onboarding-subtitle">Mine GROYP, Build Your Vault</p>
             <div class="onboarding-features">
@@ -37,8 +44,10 @@
         </div>
     </div>
 
-    <!-- MAIN APP -->
+    <!-- Main App -->
     <div id="mainApp" class="app-container" style="display:none;">
+        
+        <!-- Header -->
         <header class="app-header">
             <div class="header-user">
                 <img id="userAvatar" src="" alt="User" class="user-avatar">
@@ -54,7 +63,7 @@
             </div>
         </header>
 
-        <!-- HOME -->
+        <!-- Home Page -->
         <section id="pageHome" class="page active">
             <div class="card mining-card">
                 <div class="mining-ring-container">
@@ -124,7 +133,7 @@
             </div>
         </section>
 
-        <!-- EARN -->
+        <!-- Earn Page -->
         <section id="pageEarn" class="page">
             <div class="card ads-card">
                 <h3 class="card-title"><i class="fas fa-play-circle"></i> Watch & Earn</h3>
@@ -145,7 +154,7 @@
             </div>
         </section>
 
-        <!-- REFERRAL -->
+        <!-- Referral Page -->
         <section id="pageReferral" class="page">
             <div class="card invite-card">
                 <div class="invite-glow"></div>
@@ -170,7 +179,7 @@
             </div>
         </section>
 
-        <!-- WALLET -->
+        <!-- Wallet Page -->
         <section id="pageWallet" class="page">
             <div class="card user-card">
                 <img id="walletAvatar" src="" alt="User" class="wallet-avatar">
@@ -199,7 +208,7 @@
             </div>
         </section>
 
-        <!-- BOTTOM NAV -->
+        <!-- Bottom Nav -->
         <nav class="bottom-nav">
             <button class="nav-item active" data-page="home"><i class="fas fa-home"></i><span>Home</span></button>
             <button class="nav-item" data-page="earn"><i class="fas fa-gift"></i><span>Earn</span></button>
@@ -209,6 +218,7 @@
     </div>
 
     <div id="toast" class="toast hidden"><span id="toastMessage">Message</span></div>
+
     <script src="app.js" defer></script>
 </body>
 </html>
