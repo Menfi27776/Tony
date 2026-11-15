@@ -15,7 +15,7 @@ if (tg) {
 // ============================================================================
 const CONFIG = {
     tokenSymbol: 'GROYP',
-    tokenAddress: 'EQBvcsqG7hqsw-HQ8bemIYrO8I_GLDTSbNiro4WOC7jAG_CH',
+    tokenAddress: 'EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     botUsername: 'GroyperMinebot',
     MINING_REWARD: 20,
     MINING_COOLDOWN_MS: 6 * 60 * 60 * 1000,
