@@ -1,9 +1,11 @@
 // ============================================================================
-// GROYPER MINE — SERVER v3.1
+// GROYPER MINE — SERVER v3.2
 // Express + Telegraf (polling) + Firebase Admin
 // Fixes:    BUG-1 (real chat verification), BUG-4 backend (price fallback)
 // Adds:     referralEarnings in /init, updated tasks (X + TG group),
 //           /price fallback, bot admin check
+//           professional broadcast (retry, cancel, status, rate limit)
+//           /cancelbroadcast, /statusbroadcast, /addbalance
 // ============================================================================
 'use strict';
 
@@ -474,6 +476,16 @@ async function verifyPayment(it, boc) {
 const bot = new Telegraf(BOT_TOKEN);
 bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
 
+// Broadcast state (must be before handlers)
+const broadcastState = {
+    running: false,
+    cancelled: false,
+    sent: 0,
+    failed: 0,
+    total: 0,
+    startedAt: 0
+};
+
 // ---- /start ----
 bot.start(async (ctx) => {
     try {
@@ -539,7 +551,6 @@ The <b>$${cfg.symbol}</b> token is <b>live & tradable</b> on multiple DEXs (DeDu
 });
 
 // ---- BOT ADMIN CHECK FOR CHAT VERIFICATION ----
-// Cache bot admin status per chat (5 min TTL)
 const botAdminCache = new Map();
 
 async function botIsAdmin(chatUsername) {
@@ -570,6 +581,23 @@ async function buildAdminPanel() {
     const s = (await db.doc('stats/global').get()).data() || {};
     const t = (k, l) => Markup.button.callback(`${c[k] ? '🟢' : '🔴'} ${l}`, 'a:tg:' + k);
 
+    const rows = [
+        [Markup.button.callback('📋 Pending withdrawals', 'a:wd')],
+        [Markup.button.callback('📝 Tasks', 'a:tasks'), Markup.button.callback('📢 Broadcast', 'a:bc')],
+        [Markup.button.callback('💰 Add balance', 'a:addbal')],
+        [t('miningEnabled', 'Mining'), t('withdrawEnabled', 'Withdraw')],
+        [t('maintenance', 'Maintenance')],
+        [Markup.button.callback('🔄 Refresh', 'a:home')]
+    ];
+
+    // If broadcast is running, add cancel button
+    if (broadcastState.running) {
+        rows.unshift([
+            Markup.button.callback('🛑 Cancel broadcast', 'a:bcancel'),
+            Markup.button.callback('📊 Status', 'a:bstatus')
+        ]);
+    }
+
     return {
         text: `👑 <b>Admin Panel</b>\n\n` +
             `👥 Users: <b>${(s.users || 0).toLocaleString()}</b>\n` +
@@ -578,14 +606,9 @@ async function buildAdminPanel() {
             `⏳ Pending: <b>${(s.pendingCount || 0).toLocaleString()}</b>\n` +
             `📤 Paid out: <b>${(s.withdrawnTotal || 0).toLocaleString()}</b>\n` +
             `💎 TON revenue: <b>${(s.tonRevenue || 0).toFixed(2)}</b>\n\n` +
+            `${broadcastState.running ? '📢 <b>Broadcast running</b>\n\n' : ''}` +
             `🟢 = ON. Maintenance blocks the app.`,
-        kb: Markup.inlineKeyboard([
-            [Markup.button.callback('📋 Pending withdrawals', 'a:wd')],
-            [Markup.button.callback('📝 Tasks', 'a:tasks'), Markup.button.callback('📢 Broadcast', 'a:bc')],
-            [t('miningEnabled', 'Mining'), t('withdrawEnabled', 'Withdraw')],
-            [t('maintenance', 'Maintenance')],
-            [Markup.button.callback('🔄 Refresh', 'a:home')]
-        ])
+        kb: Markup.inlineKeyboard(rows)
     };
 }
 
@@ -638,6 +661,75 @@ bot.command('user', async (ctx) => {
         `Banned: ${u.banned}\n` +
         `Wallet: <code>${u.wallet || '-'}</code>`
     );
+});
+
+// ---- /addbalance (NEW) ----
+// Usage: /addbalance <telegram_id_or_@username> <amount>
+// Amount can be negative to remove.
+bot.command('addbalance', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+
+    const parts = ctx.message.text.split(/\s+/);
+    const target = parts[1];
+    const amount = Number(parts[2]);
+
+    if (!target || !Number.isFinite(amount) || amount === 0) {
+        return ctx.reply(
+            'Usage: /addbalance <id_or_@username> <amount>\n' +
+            'Example: /addbalance 123456789 500\n' +
+            'Example: /addbalance @username 500\n' +
+            'Amount can be negative to remove.'
+        );
+    }
+
+    let uid = null;
+    if (/^\d{5,15}$/.test(target)) {
+        uid = target;
+    } else if (/^@\w+$/.test(target)) {
+        // Look up by username via query (Firestore doesn't have case-insensitive query, so we scan)
+        const username = target.slice(1).toLowerCase();
+        const snap = await db.collection('users').limit(1000).get();
+        for (const d of snap.docs) {
+            const u = d.data();
+            if ((u.username || '').toLowerCase() === username) {
+                uid = d.id;
+                break;
+            }
+        }
+        if (!uid) return ctx.reply(`❌ User @${username} not found in first 1000 records`);
+    } else {
+        return ctx.reply('❌ Invalid target. Use numeric ID or @username');
+    }
+
+    const ref = userRef(uid);
+    const snap = await ref.get();
+    if (!snap.exists) return ctx.reply('❌ User not found in database');
+
+    const u = snap.data();
+    const oldBalance = Number(u.balance) || 0;
+    const newBalance = Math.max(0, oldBalance + amount);
+
+    await ref.update({
+        balance: newBalance,
+        totalEarned: amount > 0 ? inc(amount) : inc(0)
+    });
+
+    statInc('distributed', amount > 0 ? amount : 0);
+
+    await ctx.replyWithHTML(
+        `✅ <b>Balance updated</b>\n\n` +
+        `👤 User: @${esc(u.username || '')} (${uid})\n` +
+        `💰 Old: ${oldBalance.toLocaleString()} ${DEFAULTS.symbol}\n` +
+        `💰 New: ${newBalance.toLocaleString()} ${DEFAULTS.symbol}\n` +
+        `📊 Change: ${amount > 0 ? '+' : ''}${amount.toLocaleString()}`
+    );
+
+    // Notify user
+    if (amount > 0) {
+        notify(uid, `🎁 Admin credited <b>${amount.toLocaleString()} ${DEFAULTS.symbol}</b> to your balance!`);
+    }
+
+    log(`Admin ${ADMIN_ID} added ${amount} to user ${uid} (new balance ${newBalance})`);
 });
 
 // ---- Admin actions ----
@@ -737,8 +829,28 @@ bot.action(/^a:(\w+)(?::(.+))?$/, async (ctx) => {
             return finishTask(ctx, s);
         }
         if (act === 'bc') {
+            if (broadcastState.running) {
+                return ctx.reply('⚠️ Broadcast already running. Use Cancel button first.');
+            }
             sessions.set(ADMIN_ID, { step: 'bc' });
             return ctx.reply('📢 Send the broadcast text. /cancel to abort.');
+        }
+        if (act === 'bcancel') {
+            if (!broadcastState.running) return ctx.reply('No broadcast running.');
+            broadcastState.cancelled = true;
+            return ctx.reply('🛑 Cancelling… current message will finish, then stop.');
+        }
+        if (act === 'bstatus') {
+            return ctx.reply(formatBroadcastStatus());
+        }
+        if (act === 'addbal') {
+            return ctx.reply(
+                'Usage: /addbalance <id_or_@username> <amount>\n\n' +
+                'Examples:\n' +
+                '/addbalance 123456789 500\n' +
+                '/addbalance @username 500\n' +
+                '/addbalance 123456789 -100'
+            );
         }
     } catch (e) {
         ctx.reply('⚠️ ' + (e.message || 'Error'));
@@ -762,23 +874,113 @@ async function finishTask(ctx, s) {
     ctx.reply(`✅ Task "${s.name}" added (${s.verify}).`);
 }
 
+// ---- Broadcast (PROFESSIONAL) ----
+function formatBroadcastStatus() {
+    if (!broadcastState.running) return 'No broadcast running.';
+    const done = broadcastState.sent + broadcastState.failed;
+    const pct = broadcastState.total > 0
+        ? ((done / broadcastState.total) * 100).toFixed(1)
+        : '?';
+    const elapsed = ((Date.now() - broadcastState.startedAt) / 1000).toFixed(0);
+    return `📊 Broadcast Status\n\n` +
+        `✅ Sent: ${broadcastState.sent.toLocaleString()}\n` +
+        `❌ Failed: ${broadcastState.failed.toLocaleString()}\n` +
+        `📈 Progress: ${pct}%\n` +
+        `⏱️ Elapsed: ${elapsed}s\n` +
+        `📌 Running: ${broadcastState.cancelled ? '🛑 Cancelling' : '✅ Active'}`;
+}
+
 async function broadcast(text) {
-    let sent = 0, failed = 0, last = null;
-    for (;;) {
-        let q = db.collection('users').orderBy('__name__').limit(300);
+    if (broadcastState.running) {
+        notify(ADMIN_ID, '⚠️ Broadcast already running. Use /cancelbroadcast to stop.');
+        return;
+    }
+
+    broadcastState.running = true;
+    broadcastState.cancelled = false;
+    broadcastState.sent = 0;
+    broadcastState.failed = 0;
+    broadcastState.startedAt = Date.now();
+
+    // Count total
+    try {
+        const countSnap = await db.collection('users').count().get();
+        broadcastState.total = countSnap.data().count;
+    } catch { broadcastState.total = 0; }
+
+    notify(ADMIN_ID,
+        `📢 Broadcast started\n` +
+        `👥 Users: ${broadcastState.total.toLocaleString()}\n` +
+        `Use /statusbroadcast to check progress.\n` +
+        `Use /cancelbroadcast to stop.`
+    );
+
+    let last = null;
+    while (!broadcastState.cancelled) {
+        let q = db.collection('users').orderBy('__name__').limit(50);
         if (last) q = q.startAfter(last);
         const snap = await q.get();
         if (snap.empty) break;
+
         for (const d of snap.docs) {
-            try { await bot.telegram.sendMessage(d.id, '📢 ' + text, { parse_mode: 'HTML' }); sent++; }
-            catch { failed++; }
-            await sleep(45);
+            if (broadcastState.cancelled) break;
+
+            let attempt = 0;
+            let success = false;
+
+            while (attempt < 3 && !success && !broadcastState.cancelled) {
+                try {
+                    await bot.telegram.sendMessage(d.id, '📢 ' + text, { parse_mode: 'HTML' });
+                    success = true;
+                    broadcastState.sent++;
+                } catch (e) {
+                    if (e.code === 429) {
+                        const wait = (e.parameters?.retry_after || 5) * 1000;
+                        log(`⏳ Rate limit — waiting ${wait}ms`);
+                        await sleep(wait + 500);
+                    } else if (e.code === 403) {
+                        // User blocked bot — skip
+                        broadcastState.failed++;
+                        success = true;
+                    } else {
+                        attempt++;
+                        await sleep(1000 * attempt);
+                    }
+                }
+            }
+
+            if (!success) broadcastState.failed++;
+            await sleep(40);
         }
+
         last = snap.docs[snap.docs.length - 1];
     }
-    notify(ADMIN_ID, `✅ Broadcast: ${sent} sent, ${failed} failed.`);
+
+    const duration = ((Date.now() - broadcastState.startedAt) / 1000).toFixed(1);
+    const msg = broadcastState.cancelled
+        ? `🛑 Broadcast cancelled\n✅ Sent: ${broadcastState.sent.toLocaleString()}\n❌ Failed: ${broadcastState.failed.toLocaleString()}`
+        : `✅ Broadcast complete\n✅ Sent: ${broadcastState.sent.toLocaleString()}\n❌ Failed: ${broadcastState.failed.toLocaleString()}\n⏱️ ${duration}s`;
+
+    notify(ADMIN_ID, msg);
+    log('Broadcast:', msg);
+    broadcastState.running = false;
 }
 
+// ---- /cancelbroadcast ----
+bot.command('cancelbroadcast', (ctx) => {
+    if (!isAdmin(ctx)) return;
+    if (!broadcastState.running) return ctx.reply('No broadcast running.');
+    broadcastState.cancelled = true;
+    ctx.reply('🛑 Cancelling… current message will finish, then stop.');
+});
+
+// ---- /statusbroadcast ----
+bot.command('statusbroadcast', (ctx) => {
+    if (!isAdmin(ctx)) return;
+    ctx.reply(formatBroadcastStatus());
+});
+
+// ---- Text handler (sessions) ----
 bot.on('text', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const s = sessions.get(ADMIN_ID);
@@ -837,7 +1039,7 @@ bot.on('text', async (ctx) => {
     }
     if (s.step === 'bc') {
         sessions.delete(ADMIN_ID);
-        ctx.reply('⏳ Broadcasting...');
+        ctx.reply('⏳ Broadcasting…');
         broadcast(t).catch(e => notify(ADMIN_ID, 'Broadcast error: ' + e.message));
     }
 });
@@ -894,7 +1096,6 @@ api.get('/init', h(async (req, res) => {
     const u = snap.exists ? snap.data() : null;
     if (u?.banned) throw new AppErr('Account banned', 403);
 
-    // Compute referral earnings if not stored
     let userOut = u ? pub(u) : null;
     if (userOut) {
         if (typeof userOut.referralEarnings !== 'number') {
@@ -992,12 +1193,10 @@ api.post('/mining/claim', h(async (req, res) => {
             isActive: true
         });
 
-        // Referral activation happens on FIRST successful mining claim
         if (!u.isActive && u.referredBy) {
             const rr = userRef(u.referredBy);
             const refEarn = cfg.referralReward;
 
-            // Update referrer: activate + reward + track earnings
             tx.set(rr, {
                 activeReferrals: inc(1),
                 inactiveReferrals: inc(-1),
@@ -1174,15 +1373,12 @@ api.post('/tasks/verify', h(async (req, res) => {
     const task = (await getTasks()).find(t => t.id === taskId);
     if (!task) throw new AppErr('Task not found');
 
-    // Already completed?
     const pre = await userRef(id).get();
     if (pre.exists && (pre.data().completedTasks || []).includes(taskId)) {
         throw new AppErr('Already completed');
     }
 
-    // ---- CHAT VERIFICATION (BUG-1) ----
     if (task.verify === 'chat') {
-        // 1) Bot must be admin in the chat
         const adminOk = await botIsAdmin(task.chat);
         if (!adminOk) {
             log('❌ Bot is not admin in', task.chat, '— refusing verify');
@@ -1194,15 +1390,11 @@ api.post('/tasks/verify', h(async (req, res) => {
             throw new AppErr('Verification temporarily unavailable. Please try again later.');
         }
 
-        // 2) User must be a member
-        let memberStatus = null;
         try {
             const m = await bot.telegram.getChatMember(task.chat, +id);
-            memberStatus = m?.status || null;
             const isMember =
-                ['member', 'administrator', 'creator'].includes(memberStatus) ||
-                (memberStatus === 'restricted' && m.is_member === true);
-
+                ['member', 'administrator', 'creator'].includes(m?.status) ||
+                (m?.status === 'restricted' && m.is_member === true);
             if (!isMember) {
                 throw new AppErr('Please join the channel/group first, then press Verify again.');
             }
@@ -1213,7 +1405,6 @@ api.post('/tasks/verify', h(async (req, res) => {
         }
     }
 
-    // ---- REWARD ----
     const out = await db.runTransaction(async (tx) => {
         const ref = userRef(id);
         const s = await tx.get(ref);
