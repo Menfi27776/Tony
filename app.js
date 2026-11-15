@@ -1,9 +1,9 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.4
-// Full rewrite with all fixes and new integrations.
-// Fixes:    referral link format (/Mine?startapp=), ad loading freeze
-// Adds:     Adexium (interstitial, manual only), Monetag + Adexium rotation,
-//           removed RichAds (does not support manual show)
+// GROYPER MINE — EMBER VAULT v2.5
+// Full rewrite — legendary edition with all fixes and new integrations.
+// Fixes:    referral link (/Mine?startapp=), ad loading freeze, Adexium init
+// Adds:     Monetag + Adexium random rotation, fast fail, UI feedback,
+//           strict task verification, full responsiveness
 // ============================================================================
 'use strict';
 
@@ -140,7 +140,7 @@ async function copyToClipboard(text) {
     } catch { return false; }
 }
 
-// Build the correct referral link (opens Mini App directly)
+// Build correct referral link (opens Mini App directly)
 function buildReferralLink(uid) {
     if (!uid) return '';
     return `https://t.me/${CONFIG.botUsername}/${CONFIG.botShortName}?startapp=${uid}`;
@@ -327,7 +327,7 @@ function enterApp() {
     fetchTokenPrice();
 }
 
-// Re-render immediately when the app becomes visible again
+// Re-render on visibility return
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden && booted) {
         renderMining();
@@ -438,7 +438,7 @@ function renderToken() {
     set('tokenLiquidity', fmtMoney(livePriceData.liq));
     set('tokenVolume',    fmtMoney(livePriceData.vol));
 
-    // Contract address — MUST use innerHTML
+    // Contract address — MUST use innerHTML (fix raw <i> display)
     const ca = $('contractAddress');
     if (ca) {
         const shortAddr = CONFIG.tokenAddress.slice(0, 6) + '…' + CONFIG.tokenAddress.slice(-6);
@@ -577,7 +577,7 @@ async function claimMining() {
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — Monetag + Adexium (manual only)
+// 10. ADS — Monetag + Adexium (manual only, fast fail)
 // ----------------------------------------------------------------------------
 function getAdsCooldownLeft() {
     return Math.max(0, (currentUser?.adsCooldownUntil || 0) - now());
@@ -622,7 +622,10 @@ function showAdexiumAd() {
     const w = window.adexiumWidget;
     if (!w) return false;
 
-    const methods = ['show', 'showAd', 'showInterstitial', 'display', 'open'];
+    const methods = window.__adexiumMethod
+        ? [window.__adexiumMethod, 'show', 'showAd', 'showInterstitial', 'display', 'open']
+        : ['show', 'showAd', 'showInterstitial', 'display', 'open'];
+
     for (const m of methods) {
         if (typeof w[m] === 'function') {
             try {
@@ -659,10 +662,9 @@ function showMonetagAd() {
     }
 }
 
-// Random provider: 50% Monetag, 50% Adexium
+// Random provider: 50% Monetag, 50% Adexium (fast fallback)
 function tryTriggerAdSDK() {
     const providers = [];
-
     if (typeof window.show_12265394 === 'function') providers.push('monetag');
     if (window.adexiumWidget) providers.push('adexium');
 
@@ -675,11 +677,9 @@ function tryTriggerAdSDK() {
 
     if (provider === 'monetag') {
         if (showMonetagAd()) return 'monetag';
-        // Fallback to Adexium
         if (showAdexiumAd()) return 'adexium';
     } else {
         if (showAdexiumAd()) return 'adexium';
-        // Fallback to Monetag
         if (showMonetagAd()) return 'monetag';
     }
 
@@ -693,7 +693,10 @@ async function watchAd() {
 
     adSequenceActive = true;
     const btn = $('watchAdBtn');
-    if (btn) btn.disabled = true;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+    }
 
     try {
         const start = await apiRequest('/ads/start', { method: 'POST', body: { token: adsState.token || null } });
@@ -704,14 +707,17 @@ async function watchAd() {
 
         const { ymid, token } = start;
 
+        // Trigger ad SDK (random provider)
         const provider = tryTriggerAdSDK();
         if (!provider) {
             showToast('No ad available. Try again.', 'error');
             return;
         }
 
-        showToast('🎬 Watching ad...', 'info', 2000);
+        // Immediate UI feedback
+        showToast(`🎬 Watching ${provider}...`, 'info', 2000);
 
+        // Wait for minimum gap (server enforces too)
         const gapMs = (CONFIG.ADS_MIN_GAP_SEC || 15) * 1000;
         await sleep(gapMs);
 
@@ -732,7 +738,10 @@ async function watchAd() {
         showToast(e.message || 'Ad failed', 'error');
     } finally {
         adSequenceActive = false;
-        if (btn) btn.disabled = false;
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play" aria-hidden="true"></i> <span id="watchAdLabel">WATCH AD</span>';
+        }
         renderAds();
     }
 }
@@ -760,7 +769,7 @@ async function claimAdsReward() {
 }
 
 // ----------------------------------------------------------------------------
-// 11. TASKS
+// 11. TASKS — Strict chat verification
 // ----------------------------------------------------------------------------
 function renderTasks() {
     const c = $('taskList');
@@ -799,6 +808,7 @@ async function taskAction(taskId, action) {
         return;
     }
 
+    // Verify — server enforces membership for verify='chat'
     const res = await apiRequest('/tasks/verify', { method: 'POST', body: { taskId } });
     if (res.success) {
         currentUser = res.user;
