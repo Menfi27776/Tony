@@ -13,28 +13,45 @@
     <!-- TON Connect (PINNED VERSION — NOT @latest) -->
     <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
 
-    <!-- Ad Networks -->
+    <!-- ==================== AD NETWORKS ==================== -->
+
     <!-- Monetag -->
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
 
-    <!-- Adexium -->
+    <!-- Adexium (Frontend only) -->
     <script src="https://cdn.tgads.space/assets/js/adexium-widget.min.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            try {
-                window.adexiumWidget = new AdexiumWidget({
-                    wid: 'd9e2de77-513f-469f-9a05-eb03d0069f8e',
-                    adFormat: 'interstitial'
-                });
-                // ❌ NO autoMode() — only shown on user click
-                console.log('✅ Adexium initialized');
-            } catch (e) {
-                console.warn('⚠️ Adexium init failed:', e);
-            }
-        });
+    (async function initAdexium() {
+        // Wait up to 4s for SDK to load
+        for (let i = 0; i < 20; i++) {
+            if (typeof window.AdexiumWidget !== 'undefined') break;
+            await new Promise(r => setTimeout(r, 200));
+        }
+
+        if (typeof window.AdexiumWidget === 'undefined') {
+            console.warn('⚠️ AdexiumWidget SDK not loaded after 4s');
+            return;
+        }
+
+        try {
+            window.adexiumWidget = new window.AdexiumWidget({
+                wid: 'd9e2de77-513f-469f-9a05-eb03d0069f8e',
+                adFormat: 'interstitial'
+            });
+
+            // Discover available show method
+            const methods = ['show', 'showAd', 'showInterstitial', 'display', 'open'];
+            const available = methods.filter(m => typeof window.adexiumWidget[m] === 'function');
+            window.__adexiumMethod = available[0] || null;
+
+            console.log('✅ Adexium initialized. Available methods:', available);
+        } catch (e) {
+            console.error('❌ Adexium init failed:', e);
+        }
+    })();
     </script>
 
-    <!-- Fonts -->
+    <!-- ==================== FONTS ==================== -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -289,6 +306,12 @@
                 <h2 class="invite-title">Invite Friends,<br>Share the Fire 🔥</h2>
                 <p class="invite-reward">
                     Earn <strong id="refRewardText">75 GROYP</strong> per active referral
+                </p>
+                <p class="invite-condition">
+                    <i class="fas fa-info-circle"></i>
+                    Referral counts as <strong>active</strong> only after your friend:<br>
+                    ① Joins <a href="https://t.me/GroyperMine" target="_blank">our Telegram channel</a><br>
+                    ② Makes their first mining claim
                 </p>
                 <div class="invite-buttons">
                     <button id="copyReferralBtn" class="btn-primary">
