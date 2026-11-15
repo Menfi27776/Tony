@@ -76,7 +76,10 @@ async function apiRequest(url, opts = {}) {
 // TON CONNECT
 // ============================================================================
 function initTonConnect() {
-    if (typeof TON_CONNECT_UI === 'undefined') return;
+    if (typeof TON_CONNECT_UI === 'undefined') {
+        console.error('TON_CONNECT_UI not loaded');
+        return;
+    }
     try {
         window.tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
             manifestUrl: window.location.origin + '/tonconnect-manifest.json',
@@ -93,7 +96,7 @@ function initTonConnect() {
                 tonWalletAddress = null;
             }
         });
-    } catch (e) { console.error('TonConnect:', e); }
+    } catch (e) { console.error('TonConnect Error:', e); }
 }
 
 // ============================================================================
@@ -141,26 +144,43 @@ async function checkAndProceed() {
 }
 
 // ============================================================================
-// DEXSCREENER
+// DEXSCREENER (Using Correct API Endpoint)
 // ============================================================================
 async function fetchTokenPrice() {
     try {
-        const res = await fetch(`https://api.dexscreener.com/tokens/v1/ton/${CONFIG.tokenAddress}`);
+        console.log('Fetching token price from DexScreener...');
+        const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${CONFIG.tokenAddress}`);
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-            const p = data[0];
-            livePriceData = { price: parseFloat(p.priceUsd) || 0, change24h: parseFloat(p.priceChange?.h24) || 0 };
+        
+        if (data && data.pairs && data.pairs.length > 0) {
+            // Sort by liquidity (USD) descending to get the main pair
+            const bestPair = data.pairs.sort((a, b) => (parseFloat(b.liquidity?.usd) || 0) - (parseFloat(a.liquidity?.usd) || 0))[0];
+            
+            livePriceData = { 
+                price: parseFloat(bestPair.priceUsd) || 0, 
+                change24h: parseFloat(bestPair.priceChange?.h24) || 0 
+            };
+            
             document.getElementById('tokenPrice').textContent = `$${livePriceData.price.toFixed(8)}`;
-            document.getElementById('tokenMarketCap').textContent = `$${(parseFloat(p.marketCap) || 0).toLocaleString()}`;
-            document.getElementById('tokenFdv').textContent = `$${(parseFloat(p.fdv) || 0).toLocaleString()}`;
-            document.getElementById('tokenLiquidity').textContent = `$${(parseFloat(p.liquidity?.usd) || 0).toLocaleString()}`;
-            document.getElementById('tokenVolume').textContent = `$${(parseFloat(p.volume?.h24) || 0).toLocaleString()}`;
+            document.getElementById('tokenMarketCap').textContent = `$${(parseFloat(bestPair.marketCap) || 0).toLocaleString()}`;
+            document.getElementById('tokenFdv').textContent = `$${(parseFloat(bestPair.fdv) || 0).toLocaleString()}`;
+            document.getElementById('tokenLiquidity').textContent = `$${(parseFloat(bestPair.liquidity?.usd) || 0).toLocaleString()}`;
+            document.getElementById('tokenVolume').textContent = `$${(parseFloat(bestPair.volume?.h24) || 0).toLocaleString()}`;
+            
             const ch = document.getElementById('tokenChange');
             ch.textContent = `${livePriceData.change24h >= 0 ? '+' : ''}${livePriceData.change24h.toFixed(2)}%`;
             ch.className = `token-change ${livePriceData.change24h >= 0 ? 'positive' : 'negative'}`;
+            
             updateHeaderWallet();
+            console.log('Token price updated:', livePriceData);
+        } else {
+            console.error('DexScreener: No pairs found for this token.', data);
+            showToast('Could not load token data', 'error');
         }
-    } catch (e) { console.error('DexScreener:', e); }
+    } catch (e) { 
+        console.error('DexScreener Error:', e); 
+        showToast('Network error loading token', 'error');
+    }
 }
 
 // ============================================================================
@@ -381,9 +401,12 @@ async function submitWithdraw() {
     const amount = parseFloat(document.getElementById('withdrawAmount').value) || 0;
     if (amount < CONFIG.MIN_WITHDRAW) return showToast(`Minimum ${CONFIG.MIN_WITHDRAW}`, 'error');
     if (amount > currentUser.balance) return showToast('Insufficient balance', 'error');
+    if (!tonWalletAddress) return showToast('Connect wallet first', 'error');
+    
     isProcessingWithdraw = true;
     const btn = document.getElementById('withdrawBtn');
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> PROCESSING...';
+    
     try {
         if (!currentUser.withdrawFeePaid) {
             const cfg = await apiRequest('/api/config');
@@ -421,13 +444,20 @@ function switchPage(name) {
 
 function init() {
     userId = tg?.initDataUnsafe?.user?.id?.toString() || new URLSearchParams(window.location.search).get('userId');
-    if (!userId) return showToast('Open from Telegram', 'error');
+    if (!userId) {
+        console.error('No userId found');
+        return showToast('Open from Telegram', 'error');
+    }
+    console.log('User ID:', userId);
+    
     initTonConnect();
+    
     document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => switchPage(i.dataset.page)));
     document.getElementById('claimMiningBtn').onclick = claimMining;
     document.getElementById('watchAdBtn').onclick = watchAd;
     document.getElementById('claimAdsBtn').onclick = claimAdsReward;
     document.getElementById('withdrawBtn').onclick = submitWithdraw;
+    
     document.getElementById('copyReferralBtn').onclick = () => {
         navigator.clipboard.writeText(`https://t.me/GroyperMinebot/Mine?startapp=${userId}`);
         showToast('Link copied!', 'success');
@@ -444,6 +474,7 @@ function init() {
     document.getElementById('maxWithdrawBtn').onclick = () => {
         document.getElementById('withdrawAmount').value = Math.floor(currentUser?.balance || 0);
     };
+    
     window.buyBoost = async (type) => {
         if (!tonConnected) return showToast('Connect wallet first', 'warning');
         const b = CONFIG.BOOSTS[type];
@@ -461,6 +492,8 @@ function init() {
             } else showToast(v.error, 'error');
         } catch (e) { showToast('Payment failed', 'error'); }
     };
+    
+    // If wallet is already connected, proceed
     if (window.tonConnectUI?.wallet) {
         tonConnected = true;
         tonWalletAddress = window.tonConnectUI.wallet.account.address;
