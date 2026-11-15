@@ -1,9 +1,13 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.5
+// GROYPER MINE — EMBER VAULT v2.6
 // Full rewrite — legendary edition with all fixes and new integrations.
-// Fixes:    referral link (/Mine?startapp=), ad loading freeze, Adexium init
-// Adds:     Monetag + Adexium random rotation, fast fail, UI feedback,
-//           strict task verification, full responsiveness
+// Fixes:    referral link (/Mine?startapp=), Adexium API, ad loading freeze,
+//           UI feedback, strict task verification, full responsiveness
+// Adds:     Monetag + Adexium random rotation, fallback ads,
+//           ad before mining claim, 3-hour cooldown, 10 GROYP reward,
+//           new boost plans (3x/8x/20x, 3/6/15 TON, 7 days),
+//           localStorage ad tracking (no DB until claim),
+//           boost shortcut button, dynamic boost rendering
 // ============================================================================
 'use strict';
 
@@ -26,8 +30,8 @@ const CONFIG = {
     tokenAddress: 'EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     botUsername: 'GroyperMinebot',
     botShortName: 'Mine',
-    MINING_REWARD: 20,
-    MINING_COOLDOWN_MS: 6 * 60 * 60 * 1000,
+    MINING_REWARD: 10,
+    MINING_COOLDOWN_MS: 3 * 60 * 60 * 1000,
     REWARD_PER_AD: 2,
     MAX_ADS_PER_BATCH: 10,
     ADS_BATCH_REWARD: 20,
@@ -44,10 +48,11 @@ const CONFIG = {
     MIN_WITHDRAW: 2000,
     WITHDRAW_FEE_TON: 0.1,
     BOOSTS: {
-        bronze: { price: 1, multiplier: 2, name: 'SPARK', icon: '🥉' },
-        silver: { price: 2.5, multiplier: 5, name: 'BLAZE', icon: '🥈' },
-        gold: { price: 10, multiplier: 12, name: 'INFERNO', icon: '🥇' }
-    }
+        bronze: { price: 3,  multiplier: 3,  name: 'SPARK',   icon: '🥉' },
+        silver: { price: 6,  multiplier: 8,  name: 'BLAZE',   icon: '🥈' },
+        gold:   { price: 15, multiplier: 20, name: 'INFERNO', icon: '🥇' }
+    },
+    BOOST_DAYS: 7
 };
 
 // ----------------------------------------------------------------------------
@@ -65,6 +70,7 @@ let adSequenceActive = false;
 let miningTimer = null;
 let livePriceData = { price: 0, change24h: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
 let adsState = { watched: 0, accumulated: 0, token: null };
+let adWatchedLocal = 0;
 let booted = false;
 let serverOffset = 0;
 let lastPriceFetch = 0;
@@ -315,6 +321,9 @@ function enterApp() {
     if ($('userHandle')) $('userHandle').textContent = '@' + (u.username || currentUser?.username || 'user');
     if ($('walletUserHandle')) $('walletUserHandle').textContent = '@' + (u.username || currentUser?.username || 'user');
 
+    // Load ad progress from localStorage
+    loadAdsState();
+
     renderAll();
 
     if (miningTimer) clearInterval(miningTimer);
@@ -557,28 +566,80 @@ async function claimMining() {
     if (!getMiningData().canClaim) return showToast('Not ready yet', 'warning');
 
     isClaimingMining = true;
-    renderMining();
+    const btn = $('claimMiningBtn');
+    const originalBtn = btn?.innerHTML;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...';
+    }
 
     try {
+        // 1. Show ad (with fallback)
+        const provider = await tryTriggerAdSDK();
+        if (!provider) {
+            showToast('No ad available. Try again.', 'error');
+            vibrate('error');
+            return;
+        }
+
+        // 2. UI feedback
+        if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Watching...';
+        showToast(`🎬 Watching ${provider}...`, 'info', 2000);
+
+        // 3. Wait minimum gap
+        await sleep((CONFIG.ADS_MIN_GAP_SEC || 15) * 1000);
+
+        // 4. Claim on server
+        if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
         const res = await apiRequest('/mining/claim', { method: 'POST' });
         if (!res.success) throw new Error(res.error || 'Claim failed');
 
         currentUser = res.user;
         vibrate('success');
         showToast(`+${Math.floor(res.reward).toLocaleString()} ${CONFIG.tokenSymbol}`, 'success');
+        confetti();
         renderAll();
     } catch (e) {
         vibrate('error');
         showToast(e.message || 'Claim failed', 'error');
     } finally {
         isClaimingMining = false;
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalBtn || '<i class="fas fa-fire"></i> CLAIM MINING';
+        }
         renderMining();
     }
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — Monetag + Adexium (manual only, fast fail)
+// 10. ADS — Monetag + Adexium (manual only, localStorage tracking)
 // ----------------------------------------------------------------------------
+function loadAdsState() {
+    try {
+        const saved = localStorage.getItem('adWatchedLocal');
+        adWatchedLocal = parseInt(saved || '0', 10) || 0;
+        adWatchedLocal = Math.min(adWatchedLocal, CONFIG.MAX_ADS_PER_BATCH);
+        console.log(`📂 Loaded ad progress: ${adWatchedLocal}/${CONFIG.MAX_ADS_PER_BATCH}`);
+    } catch {
+        adWatchedLocal = 0;
+    }
+}
+
+function saveAdsState() {
+    try {
+        localStorage.setItem('adWatchedLocal', String(adWatchedLocal));
+        console.log(`💾 Saved ad progress: ${adWatchedLocal}/${CONFIG.MAX_ADS_PER_BATCH}`);
+    } catch {}
+}
+
+function resetAdsState() {
+    adWatchedLocal = 0;
+    localStorage.removeItem('adWatchedLocal');
+    console.log('🔄 Ad progress reset');
+}
+
 function getAdsCooldownLeft() {
     return Math.max(0, (currentUser?.adsCooldownUntil || 0) - now());
 }
@@ -586,23 +647,27 @@ function getAdsCooldownLeft() {
 function renderAds() {
     if (!currentUser) return;
 
+    const watched = Math.min(adWatchedLocal, CONFIG.MAX_ADS_PER_BATCH);
+    const perBatch = CONFIG.MAX_ADS_PER_BATCH;
+    const perAd = CONFIG.ADS_BATCH_REWARD / perBatch;
+
+    // Segments
     const seg = $('adsSegments');
     if (seg) {
-        const w = currentUser.adsWatched || 0;
-        if (seg.children.length !== CONFIG.MAX_ADS_PER_BATCH) {
-            seg.innerHTML = '<div class="ads-segment"></div>'.repeat(CONFIG.MAX_ADS_PER_BATCH);
+        if (seg.children.length !== perBatch) {
+            seg.innerHTML = '<div class="ads-segment"></div>'.repeat(perBatch);
         }
-        [...seg.children].forEach((c, i) => c.classList.toggle('active', i < w));
+        [...seg.children].forEach((c, i) => c.classList.toggle('active', i < watched));
     }
 
-    const w = currentUser.adsWatched || 0;
-    const perAd = CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH;
+    // Counter
     const acc = $('adsAccumulated');
     const counter = $('adsCounter');
-    if (acc) acc.textContent = `${Math.floor(w * perAd)} ${CONFIG.tokenSymbol}`;
-    if (counter) counter.textContent = `${w}/${CONFIG.MAX_ADS_PER_BATCH}`;
+    if (acc) acc.textContent = `${Math.floor(watched * perAd)} ${CONFIG.tokenSymbol}`;
+    if (counter) counter.textContent = `${watched}/${perBatch}`;
 
-    const complete = w >= CONFIG.MAX_ADS_PER_BATCH;
+    // Buttons
+    const complete = watched >= perBatch;
     const cd = getAdsCooldownLeft();
     const watchBtn = $('watchAdBtn');
     const claimBtn = $('claimAdsBtn');
@@ -615,34 +680,68 @@ function renderAds() {
         const t = $('adsTimer');
         if (t) t.textContent = formatTimeLeft(cd);
     }
+
+    // Labels
+    const watchLabel = $('watchAdLabel');
+    if (watchLabel) watchLabel.textContent = `WATCH AD (+${perAd} ${CONFIG.tokenSymbol})`;
+    const claimLabel = $('claimAdsLabel');
+    if (claimLabel) claimLabel.textContent = `CLAIM ${CONFIG.ADS_BATCH_REWARD} ${CONFIG.tokenSymbol}`;
 }
 
-// Adexium — try every known show method safely
+// Adexium — use official API (requestAd + displayAd)
 function showAdexiumAd() {
-    const w = window.adexiumWidget;
-    if (!w) return false;
-
-    const methods = window.__adexiumMethod
-        ? [window.__adexiumMethod, 'show', 'showAd', 'showInterstitial', 'display', 'open']
-        : ['show', 'showAd', 'showInterstitial', 'display', 'open'];
-
-    for (const m of methods) {
-        if (typeof w[m] === 'function') {
-            try {
-                w[m]();
-                console.log(`📺 Ad provider: Adexium (${m})`);
-                return true;
-            } catch (e) {
-                console.warn(`Adexium.${m} failed:`, e);
-            }
-        }
+    const ads = window.adexiumAds;
+    if (!ads) {
+        console.warn('❌ Adexium: not initialized');
+        return false;
     }
-    return false;
+
+    try {
+        // Reset state
+        window.__adexiumAdState = 'requesting';
+        window.__adexiumAd = null;
+
+        // Request ad — triggers 'adReceived' or 'noAdFound'
+        ads.requestAd('interstitial');
+        console.log('📺 Adexium: requestAd sent');
+        return true;
+    } catch (e) {
+        console.warn('Adexium requestAd failed:', e);
+        window.__adexiumAdState = 'error';
+        return false;
+    }
+}
+
+// Wait for Adexium ad to be received
+function waitForAdexiumAd(timeoutMs = 10000) {
+    return new Promise((resolve) => {
+        const start = Date.now();
+        const check = () => {
+            const state = window.__adexiumAdState;
+            if (state === 'displayed' || state === 'completed' || state === 'closed') {
+                resolve(true);
+                return;
+            }
+            if (state === 'noAd' || state === 'error') {
+                resolve(false);
+                return;
+            }
+            if (Date.now() - start > timeoutMs) {
+                resolve(false);
+                return;
+            }
+            setTimeout(check, 200);
+        };
+        check();
+    });
 }
 
 // Monetag
 function showMonetagAd() {
-    if (typeof window.show_12265394 !== 'function') return false;
+    if (typeof window.show_12265394 !== 'function') {
+        console.warn('❌ Monetag not available');
+        return false;
+    }
     try {
         window.show_12265394({
             type: 'inApp',
@@ -654,7 +753,7 @@ function showMonetagAd() {
                 everyPage: false
             }
         });
-        console.log('📺 Ad provider: Monetag');
+        console.log('📺 Monetag called');
         return true;
     } catch (e) {
         console.warn('Monetag failed:', e);
@@ -662,77 +761,82 @@ function showMonetagAd() {
     }
 }
 
-// Random provider: 50% Monetag, 50% Adexium (fast fallback)
-function tryTriggerAdSDK() {
+// Try each provider with fallback
+async function tryTriggerAdSDK() {
     const providers = [];
     if (typeof window.show_12265394 === 'function') providers.push('monetag');
-    if (window.adexiumWidget) providers.push('adexium');
+    if (window.adexiumAds) providers.push('adexium');
 
     if (!providers.length) {
-        console.warn('❌ No ad providers available');
+        console.error('❌ No ad providers available');
         return null;
     }
 
-    const provider = providers[Math.floor(Math.random() * providers.length)];
+    const shuffled = providers.sort(() => Math.random() - 0.5);
 
-    if (provider === 'monetag') {
-        if (showMonetagAd()) return 'monetag';
-        if (showAdexiumAd()) return 'adexium';
-    } else {
-        if (showAdexiumAd()) return 'adexium';
-        if (showMonetagAd()) return 'monetag';
+    for (const provider of shuffled) {
+        console.log(`🎯 Trying: ${provider}`);
+
+        if (provider === 'monetag') {
+            if (showMonetagAd()) return 'monetag';
+            console.log('↩️ Monetag failed, trying next...');
+            continue;
+        }
+
+        if (provider === 'adexium') {
+            if (showAdexiumAd()) {
+                const ok = await waitForAdexiumAd(10000);
+                if (ok) {
+                    console.log('✅ Adexium displayed');
+                    return 'adexium';
+                }
+                console.warn('⚠️ Adexium no ad found, trying next...');
+                continue;
+            }
+            console.log('↩️ Adexium request failed, trying next...');
+            continue;
+        }
     }
 
+    console.error('❌ All providers failed');
     return null;
 }
 
 async function watchAd() {
     if (adSequenceActive) return;
-    if ((currentUser.adsWatched || 0) >= CONFIG.MAX_ADS_PER_BATCH) return showToast('Batch complete — claim reward', 'warning');
+    if (adWatchedLocal >= CONFIG.MAX_ADS_PER_BATCH) return showToast('Batch complete — claim reward', 'warning');
     if (getAdsCooldownLeft() > 0) return showToast('Ads on cooldown', 'warning');
 
     adSequenceActive = true;
     const btn = $('watchAdBtn');
+    const originalBtn = btn?.innerHTML;
     if (btn) {
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
     }
 
     try {
-        const start = await apiRequest('/ads/start', { method: 'POST', body: { token: adsState.token || null } });
-        if (!start.success) {
-            showToast(start.error || 'Failed to start ad', 'error');
-            return;
-        }
-
-        const { ymid, token } = start;
-
-        // Trigger ad SDK (random provider)
-        const provider = tryTriggerAdSDK();
+        // 1. Show ad
+        const provider = await tryTriggerAdSDK();
         if (!provider) {
             showToast('No ad available. Try again.', 'error');
             return;
         }
 
-        // Immediate UI feedback
+        // 2. UI feedback
+        if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Watching...';
         showToast(`🎬 Watching ${provider}...`, 'info', 2000);
 
-        // Wait for minimum gap (server enforces too)
-        const gapMs = (CONFIG.ADS_MIN_GAP_SEC || 15) * 1000;
-        await sleep(gapMs);
+        // 3. Wait minimum gap
+        await sleep((CONFIG.ADS_MIN_GAP_SEC || 15) * 1000);
 
-        const confirm = await apiRequest('/ads/watch', { method: 'POST', body: { ymid, token } });
-        if (confirm.success) {
-            adsState.token = confirm.token;
-            if (currentUser) currentUser.adsWatched = confirm.watched;
-            adsState.watched = confirm.watched;
-            adsState.accumulated = confirm.watched * (CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH);
-            vibrate('light');
-            renderAds();
-            showToast(`+${CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH} ${CONFIG.tokenSymbol}`, 'success');
-        } else {
-            showToast(confirm.error || 'Ad not verified', 'error');
-        }
+        // 4. Increment LOCAL count (no DB)
+        adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
+        saveAdsState();
+
+        vibrate('success');
+        renderAds();
+        showToast(`+${CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH} ${CONFIG.tokenSymbol}`, 'success');
     } catch (e) {
         vibrate('error');
         showToast(e.message || 'Ad failed', 'error');
@@ -740,7 +844,7 @@ async function watchAd() {
         adSequenceActive = false;
         if (btn) {
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play" aria-hidden="true"></i> <span id="watchAdLabel">WATCH AD</span>';
+            btn.innerHTML = originalBtn || '<i class="fas fa-play"></i> WATCH AD';
         }
         renderAds();
     }
@@ -748,22 +852,40 @@ async function watchAd() {
 
 async function claimAdsReward() {
     if (isClaimingAds) return;
-    if ((currentUser.adsWatched || 0) < CONFIG.MAX_ADS_PER_BATCH) return showToast('Watch all ads first', 'warning');
+    if (adWatchedLocal < CONFIG.MAX_ADS_PER_BATCH) return showToast('Watch all ads first', 'warning');
+    if (getAdsCooldownLeft() > 0) return showToast('Ads on cooldown', 'warning');
 
     isClaimingAds = true;
+    const btn = $('claimAdsBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
+    }
+
     try {
-        const res = await apiRequest('/ads/claim', { method: 'POST', body: { token: adsState.token } });
+        const res = await apiRequest('/ads/claim', {
+            method: 'POST',
+            body: { watchedCount: adWatchedLocal }
+        });
+
         if (res.success) {
             currentUser = res.user;
-            adsState.token = null;
+            resetAdsState();
             vibrate('success');
             showToast(`+${res.reward} ${CONFIG.tokenSymbol}`, 'success');
             renderAll();
         } else {
             showToast(res.error || 'Claim failed', 'error');
+            vibrate('error');
         }
+    } catch (e) {
+        showToast(e.message || 'Claim failed', 'error');
     } finally {
         isClaimingAds = false;
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-check"></i> CLAIM';
+        }
         renderAds();
     }
 }
@@ -1062,9 +1184,123 @@ async function submitWithdraw() {
 }
 
 // ----------------------------------------------------------------------------
-// 15. BOOSTS
+// 15. BOOSTS — 3x/8x/20x with details
 // ----------------------------------------------------------------------------
-async function buyBoost(type) {
+function getBoostDetails(type) {
+    const boost = CONFIG.BOOSTS[type];
+    if (!boost) return null;
+
+    const baseReward = CONFIG.MINING_REWARD;
+    const claimsPerDay = Math.floor(24 / 3);
+    const days = CONFIG.BOOST_DAYS || 7;
+
+    const perClaim = baseReward * boost.multiplier;
+    const daily = perClaim * claimsPerDay;
+    const totalEarned = daily * days;
+    const baseEarned = baseReward * claimsPerDay * days;
+    const extra = totalEarned - baseEarned;
+    const roiPercent = ((boost.multiplier - 1) * 100).toFixed(0);
+
+    const price = livePriceData.price || 0;
+    const totalUsd = totalEarned * price;
+    const extraUsd = extra * price;
+    const priceUsd = boost.price * 1;
+
+    return {
+        type, ...boost,
+        perClaim, daily, totalEarned, baseEarned, extra,
+        roiPercent, totalUsd, extraUsd, priceUsd,
+        claimsPerDay, days
+    };
+}
+
+function showBoostDetails(type) {
+    const d = getBoostDetails(type);
+    if (!d) return;
+
+    const modal = $('boostModal');
+    const content = $('boostDetails');
+    if (!modal || !content) {
+        // Fallback: direct confirm
+        buyBoostDirect(type);
+        return;
+    }
+
+    const fmtUsd = (v) => '$' + v.toFixed(2);
+
+    content.innerHTML = `
+        <div class="boost-modal-header">
+            <div class="boost-modal-icon">${d.icon}</div>
+            <div class="boost-modal-title">
+                <h2>${d.name}</h2>
+                <span class="boost-modal-tier">${d.multiplier}x Hash Power</span>
+            </div>
+        </div>
+        <div class="boost-modal-stats">
+            <div class="boost-stat">
+                <div class="boost-stat-label">PER CLAIM</div>
+                <div class="boost-stat-value">${d.perClaim.toLocaleString()} GROYP</div>
+                <div class="boost-stat-note">+${(d.perClaim - CONFIG.MINING_REWARD).toLocaleString()} vs base</div>
+            </div>
+            <div class="boost-stat">
+                <div class="boost-stat-label">DAILY (${d.claimsPerDay}×)</div>
+                <div class="boost-stat-value">${d.daily.toLocaleString()} GROYP</div>
+                <div class="boost-stat-note">≈ ${fmtUsd(d.daily * (livePriceData.price || 0))}</div>
+            </div>
+            <div class="boost-stat highlight">
+                <div class="boost-stat-label">${d.days} DAYS</div>
+                <div class="boost-stat-value">${d.totalEarned.toLocaleString()} GROYP</div>
+                <div class="boost-stat-note">≈ ${fmtUsd(d.totalUsd)}</div>
+            </div>
+        </div>
+        <div class="boost-modal-comparison">
+            <div class="boost-compare-row">
+                <span>Without boost (${d.days}d):</span>
+                <strong>${d.baseEarned.toLocaleString()} GROYP</strong>
+            </div>
+            <div class="boost-compare-row highlight">
+                <span>With ${d.name} (${d.days}d):</span>
+                <strong>${d.totalEarned.toLocaleString()} GROYP</strong>
+            </div>
+            <div class="boost-compare-row success">
+                <span>Extra earnings:</span>
+                <strong>+${d.extra.toLocaleString()} GROYP (+${d.roiPercent}%)</strong>
+            </div>
+            <div class="boost-compare-row success">
+                <span>Extra value (USD):</span>
+                <strong>≈ ${fmtUsd(d.extraUsd)}</strong>
+            </div>
+        </div>
+        <div class="boost-modal-price-box">
+            <div class="boost-modal-price-label">ACTIVATION PRICE</div>
+            <div class="boost-modal-price-value">${d.price} TON</div>
+            <div class="boost-modal-price-usd">≈ ${fmtUsd(d.priceUsd)}</div>
+        </div>
+        <div class="boost-modal-actions">
+            <button class="btn-secondary" onclick="closeBoostModal()">
+                <i class="fas fa-times"></i> Cancel
+            </button>
+            <button class="btn-gold" onclick="confirmBuyBoost('${type}')">
+                <i class="fas fa-bolt"></i> Activate ${d.name}
+            </button>
+        </div>
+    `;
+
+    modal.classList.remove('hidden');
+    vibrate('medium');
+}
+
+function closeBoostModal() {
+    const modal = $('boostModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+async function confirmBuyBoost(type) {
+    closeBoostModal();
+    await buyBoostDirect(type);
+}
+
+async function buyBoostDirect(type) {
     if (!tonConnected) return showToast('Connect wallet first', 'warning');
     const boost = CONFIG.BOOSTS[type];
     if (!boost) return;
@@ -1100,6 +1336,63 @@ async function buyBoost(type) {
         showToast(e.message || 'Boost failed', 'error');
         vibrate('error');
     }
+}
+
+async function buyBoost(type) {
+    showBoostDetails(type);
+}
+
+// Render boost cards dynamically
+function renderBoosts() {
+    const container = document.querySelector('.boost-scroll');
+    if (!container) return;
+
+    const price = livePriceData.price || 0;
+    const baseReward = CONFIG.MINING_REWARD;
+    const claimsPerDay = Math.floor(24 / 3);
+    const days = CONFIG.BOOST_DAYS || 7;
+
+    const cards = Object.entries(CONFIG.BOOSTS).map(([type, b]) => {
+        const perClaim = baseReward * b.multiplier;
+        const daily = perClaim * claimsPerDay;
+        const totalEarned = daily * days;
+        const monthlyUsd = totalEarned * price;
+        const priceUsd = b.price * 1;
+
+        const tierClass = type === 'silver' ? 'tier-silver' : type === 'gold' ? 'tier-gold' : '';
+        const bestBadge = type === 'gold' ? '<div class="best-badge">BEST</div>' : '';
+        const roiPercent = ((b.multiplier - 1) * 100).toFixed(0);
+
+        return `
+            <div class="boost-card ${tierClass}" data-boost="${type}">
+                ${bestBadge}
+                <div class="boost-icon">${b.icon}</div>
+                <div class="boost-name">${b.name}</div>
+                <div class="boost-mult">${b.multiplier}x</div>
+                <div class="boost-mult-label">HASH POWER</div>
+                <div class="boost-price">${b.price} TON</div>
+                <div class="boost-price-usd">≈ $${priceUsd.toFixed(2)}</div>
+                <div class="boost-duration">⏱️ ${days} days</div>
+                <div class="boost-earnings">
+                    <div class="boost-earn-row">
+                        <span>Per claim</span>
+                        <strong>${perClaim.toLocaleString()} GROYP</strong>
+                    </div>
+                    <div class="boost-earn-row">
+                        <span>Daily (${claimsPerDay}×)</span>
+                        <strong>${daily.toLocaleString()} GROYP</strong>
+                    </div>
+                    <div class="boost-earn-row">
+                        <span>${days} days</span>
+                        <strong>${totalEarned.toLocaleString()} GROYP</strong>
+                    </div>
+                </div>
+                <div class="boost-roi">+${roiPercent}%</div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = cards.join('');
 }
 
 // ----------------------------------------------------------------------------
@@ -1146,6 +1439,7 @@ function renderAll() {
     renderReferral();
     renderWallet();
     renderToken();
+    renderBoosts();
 }
 
 // ----------------------------------------------------------------------------
@@ -1185,6 +1479,24 @@ function bindEvents() {
         showToast(ok ? 'Link copied!' : 'Copy failed', ok ? 'success' : 'error');
     });
 
+    // Boost shortcut — scroll to plans
+    on('boostShortcutBtn', () => {
+        const boostScroll = document.querySelector('.boost-scroll');
+        if (!boostScroll) return;
+
+        boostScroll.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        vibrate('medium');
+
+        setTimeout(() => {
+            document.querySelectorAll('.boost-card').forEach(card => {
+                card.classList.add('highlight-pulse');
+                setTimeout(() => card.classList.remove('highlight-pulse'), 4500);
+            });
+        }, 400);
+
+        showToast('💎 Boost your mining power!', 'info', 2500);
+    });
+
     $('withdrawAmount')?.addEventListener('input', validateWithdrawInput);
 
     document.addEventListener('click', e => {
@@ -1200,6 +1512,11 @@ function bindEvents() {
 
         const ms = e.target.closest('[data-ms]');
         if (ms) { claimMilestone(ms.dataset.ms); return; }
+
+        // Close boost modal on overlay click
+        if (e.target.id === 'boostModal') {
+            closeBoostModal();
+        }
     });
 }
 
