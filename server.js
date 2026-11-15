@@ -1,7 +1,12 @@
 // ============================================================================
-// GROYPER MINE — SERVER v3.3
+// GROYPER MINE — SERVER v3.4
 // Express + Telegraf (polling) + Firebase Admin
-// All features preserved. Adds: fee required on EVERY withdrawal + diagnostics.
+// All features preserved. Adds:
+//   - 3-hour cooldown, 10 GROYP reward
+//   - New boost plans (3x/8x/20x, 3/6/15 TON, 7 days)
+//   - /ads/claim accepts watchedCount only (frontend-synced)
+//   - Removed /ads/start and /ads/watch (frontend-only ads)
+//   - fee required on EVERY withdrawal + diagnostics
 // ============================================================================
 'use strict';
 
@@ -73,8 +78,8 @@ const DEFAULTS = {
     dexUrl: 'https://dedust.io/swap/TON/EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     botUsername: 'GroyperMinebot',
     botShortName: 'Mine',
-    miningReward: 20,
-    cooldownMs: 6 * 3600e3,
+    miningReward: 10,
+    cooldownMs: 3 * 3600e3,
     adsPerBatch: 10,
     adsReward: 20,
     adsCooldownMs: 6 * 3600e3,
@@ -93,11 +98,11 @@ const DEFAULTS = {
         { count: 1000, reward: 25000 }
     ],
     boosts: {
-        bronze: { price: 1, mult: 2, name: 'SPARK' },
-        silver: { price: 2.5, mult: 5, name: 'BLAZE' },
-        gold: { price: 10, mult: 12, name: 'INFERNO' }
+        bronze: { price: 3,  mult: 3,  name: 'SPARK' },
+        silver: { price: 6,  mult: 8,  name: 'BLAZE' },
+        gold:   { price: 15, mult: 20, name: 'INFERNO' }
     },
-    boostDays: 30,
+    boostDays: 7,
     checkinRewards: [5, 10, 15, 20, 30, 40, 60],
     dailyCap: 0,
     miningEnabled: true,
@@ -146,6 +151,7 @@ const publicConfig = (c) => ({
     referralReward: c.referralReward,
     milestones: c.milestones,
     boosts: c.boosts,
+    boostDays: c.boostDays,
     checkinRewards: c.checkinRewards,
     withdrawEnabled: !!c.withdrawEnabled,
     miningEnabled: !!c.miningEnabled
@@ -524,7 +530,7 @@ bot.start(async (ctx) => {
 The <b>#1 Mining App</b> for <b>$${cfg.symbol}</b> on TON Blockchain.
 
 💰 <b>How It Works:</b>
-├ ⛏️ <b>Mining:</b> Claim <b>${cfg.miningReward} $${cfg.symbol}</b> every 6 hours.
+├ ⛏️ <b>Mining:</b> Claim <b>${cfg.miningReward} $${cfg.symbol}</b> every 3 hours.
 ├ 🎬 <b>Ads:</b> Watch 10 ads → earn <b>${cfg.adsReward} $${cfg.symbol}</b>.
 ├ ✅ <b>Tasks:</b> Complete simple tasks for <b>50 $${cfg.symbol}</b> each.
 └ 👥 <b>Referrals:</b> Earn <b>${cfg.referralReward} $${cfg.symbol}</b> per active friend.
@@ -1250,70 +1256,21 @@ api.post('/mining/claim', h(async (req, res) => {
     res.json({ success: true, reward: out.reward, user: pub(out.user) });
 }));
 
-// ---- Ads ----
-api.post('/ads/start', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const nowMs = Date.now();
-
-    const s = await userRef(id).get();
-    if (!s.exists) throw new AppErr('User not found');
-    const u = s.data();
-    if (u.banned) throw new AppErr('Account banned', 403);
-
-    const watched = u.adsWatched || 0;
-    const cooldownUntil = u.adsCooldownUntil || 0;
-
-    if (nowMs < cooldownUntil) throw new AppErr('Ads are on cooldown');
-    if (watched >= cfg.adsPerBatch) throw new AppErr('Batch complete. Claim your reward first.');
-
-    const ymid = crypto.randomBytes(16).toString('hex');
-    await db.collection('ads_pending').doc(ymid).set({
-        userId: id,
-        createdAt: nowMs,
-        completed: false
-    });
-    setTimeout(() => db.collection('ads_pending').doc(ymid).delete().catch(() => {}), 600000);
-
-    res.json({ success: true, ymid, token: ymid });
-}));
-
-api.post('/ads/watch', h(async (req, res) => {
-    const cfg = await getConfig();
-    const id = req.tg.id;
-    const nowMs = Date.now();
-    const { ymid } = req.body || {};
-    if (!ymid || typeof ymid !== 'string') throw new AppErr('Missing ymid');
-
-    const ref = db.collection('ads_pending').doc(ymid);
-    const snap = await ref.get();
-    if (!snap.exists) throw new AppErr('Invalid ad session');
-    const p = snap.data();
-    if (p.userId !== id) throw new AppErr('Wrong user');
-    if (p.completed) throw new AppErr('Already used');
-
-    const age = nowMs - p.createdAt;
-    if (age > 600000) throw new AppErr('Ad session expired');
-    if (age < cfg.adsMinGapSec * 1000) throw new AppErr('Ad was not completed');
-
-    const s = await userRef(id).get();
-    if (!s.exists) throw new AppErr('User not found');
-    const u = s.data();
-    if (nowMs < (u.adsCooldownUntil || 0)) throw new AppErr('Ads are on cooldown');
-    if ((u.adsWatched || 0) >= cfg.adsPerBatch) throw new AppErr('Batch complete');
-
-    await ref.update({ completed: true });
-    await userRef(id).update({ adsWatched: inc(1) });
-    const fresh = await userRef(id).get();
-
-    res.json({ success: true, watched: fresh.data().adsWatched, token: ymid });
-}));
-
+// ---- Ads — single claim endpoint (frontend-synced) ----
+// Note: /ads/start and /ads/watch removed.
+// Frontend tracks `adWatchedLocal` in localStorage.
+// Only when the user reaches 10 ads + taps CLAIM → this endpoint is called.
 api.post('/ads/claim', h(async (req, res) => {
     const cfg = await getConfig();
     await dailyLoad();
     const id = req.tg.id;
     const nowMs = Date.now();
+    const watchedCount = Number(req.body?.watchedCount) || 0;
+
+    // Validate
+    if (watchedCount < cfg.adsPerBatch) {
+        throw new AppErr('Watch all ads first');
+    }
 
     const out = await db.runTransaction(async (tx) => {
         const ref = userRef(id);
@@ -1321,10 +1278,11 @@ api.post('/ads/claim', h(async (req, res) => {
         if (!s.exists) throw new AppErr('User not found');
         const u = s.data();
         if (u.banned) throw new AppErr('Account banned', 403);
-        if ((u.adsWatched || 0) < cfg.adsPerBatch) throw new AppErr('Watch all ads first');
+        if (nowMs < (u.adsCooldownUntil || 0)) throw new AppErr('Ads are on cooldown');
 
         capCheck(cfg, cfg.adsReward);
         const until = nowMs + cfg.adsCooldownMs;
+
         tx.update(ref, {
             balance: inc(cfg.adsReward),
             totalEarned: inc(cfg.adsReward),
@@ -1560,7 +1518,7 @@ api.post('/withdraw/intent', h(async (req, res) => {
     }
     if ((u.pendingWd || 0) >= cfg.maxPendingWd) throw new AppErr('Too many pending withdrawals');
 
-    // ✅ NEW: fee required on EVERY withdrawal (based on config)
+    // ✅ Fee required on EVERY withdrawal (based on config)
     const feeRequired = !!cfg.feeAlwaysRequired;
 
     const ref = db.collection('intents').doc();
