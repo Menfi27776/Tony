@@ -1,11 +1,7 @@
 // ============================================================================
-// GROYPER MINE — SERVER v3.2
+// GROYPER MINE — SERVER v3.3
 // Express + Telegraf (polling) + Firebase Admin
-// Fixes:    BUG-1 (real chat verification), BUG-4 backend (price fallback)
-// Adds:     referralEarnings in /init, updated tasks (X + TG group),
-//           /price fallback, bot admin check
-//           professional broadcast (retry, cancel, status, rate limit)
-//           /cancelbroadcast, /statusbroadcast, /addbalance
+// All features preserved. Adds: fee required on EVERY withdrawal + diagnostics.
 // ============================================================================
 'use strict';
 
@@ -76,6 +72,7 @@ const DEFAULTS = {
     groupUrl: 'https://t.me/communityGROYP',
     dexUrl: 'https://dedust.io/swap/TON/EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P',
     botUsername: 'GroyperMinebot',
+    botShortName: 'Mine',
     miningReward: 20,
     cooldownMs: 6 * 3600e3,
     adsPerBatch: 10,
@@ -84,6 +81,7 @@ const DEFAULTS = {
     adsMinGapSec: 15,
     minWithdraw: 2000,
     feeTon: 0.1,
+    feeAlwaysRequired: true,
     minAccountAgeHours: 12,
     maxPendingWd: 3,
     referralReward: 75,
@@ -132,6 +130,7 @@ const publicConfig = (c) => ({
     symbol: c.symbol,
     bot: c.botUsername,
     botUsername: c.botUsername,
+    botShortName: c.botShortName || 'Mine',
     tokenAddress: c.tokenAddress,
     tokenSymbol: c.symbol,
     miningReward: c.miningReward,
@@ -142,10 +141,14 @@ const publicConfig = (c) => ({
     adsMinGapSec: c.adsMinGapSec,
     minWithdraw: c.minWithdraw,
     feeTon: c.feeTon,
+    feeAlwaysRequired: !!c.feeAlwaysRequired,
+    minAccountAgeHours: c.minAccountAgeHours,
     referralReward: c.referralReward,
     milestones: c.milestones,
     boosts: c.boosts,
-    checkinRewards: c.checkinRewards
+    checkinRewards: c.checkinRewards,
+    withdrawEnabled: !!c.withdrawEnabled,
+    miningEnabled: !!c.miningEnabled
 });
 
 // ============================================================================
@@ -195,7 +198,7 @@ const capCommit = (n) => {
 };
 
 // ============================================================================
-// 5. TASKS (UPDATED: X = Daily_AirdropX, Group = communityGROYP)
+// 5. TASKS (DEFAULT — updated to X + communityGROYP)
 // ============================================================================
 const DEFAULT_TASKS = [
     {
@@ -476,7 +479,7 @@ async function verifyPayment(it, boc) {
 const bot = new Telegraf(BOT_TOKEN);
 bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
 
-// Broadcast state (must be before handlers)
+// Broadcast state
 const broadcastState = {
     running: false,
     cancelled: false,
@@ -550,11 +553,14 @@ The <b>$${cfg.symbol}</b> token is <b>live & tradable</b> on multiple DEXs (DeDu
     }
 });
 
-// ---- BOT ADMIN CHECK FOR CHAT VERIFICATION ----
+// ---- Bot admin check for chat verification (with detailed logs) ----
 const botAdminCache = new Map();
 
 async function botIsAdmin(chatUsername) {
-    if (!chatUsername) return false;
+    if (!chatUsername) {
+        log('botIsAdmin: no chatUsername provided');
+        return false;
+    }
     const key = String(chatUsername).toLowerCase();
     const c = botAdminCache.get(key);
     if (c && c.exp > Date.now()) return c.v;
@@ -562,17 +568,20 @@ async function botIsAdmin(chatUsername) {
     try {
         const me = await bot.telegram.getMe();
         const member = await bot.telegram.getChatMember(chatUsername, me.id);
-        const isAdmin = ['administrator', 'creator'].includes(member.status);
+        const status = member?.status;
+        const isAdmin = ['administrator', 'creator'].includes(status);
+        log(`botIsAdmin: bot=${me.id} chat=${chatUsername} status=${status} isAdmin=${isAdmin}`);
         botAdminCache.set(key, { v: isAdmin, exp: Date.now() + 300000 });
         return isAdmin;
     } catch (e) {
-        log('botIsAdmin error for', chatUsername, ':', e.message);
+        log(`❌ botIsAdmin FAILED for ${chatUsername}: ${e.message}`);
+        log(`   Possible reasons: bot is not admin, chat username wrong, or bot removed.`);
         botAdminCache.set(key, { v: false, exp: Date.now() + 60000 });
         return false;
     }
 }
 
-// ---- ADMIN PANEL ----
+// ---- Admin panel ----
 const isAdmin = (ctx) => String(ctx.from?.id) === ADMIN_ID;
 const sessions = new Map();
 
@@ -590,7 +599,6 @@ async function buildAdminPanel() {
         [Markup.button.callback('🔄 Refresh', 'a:home')]
     ];
 
-    // If broadcast is running, add cancel button
     if (broadcastState.running) {
         rows.unshift([
             Markup.button.callback('🛑 Cancel broadcast', 'a:bcancel'),
@@ -626,14 +634,35 @@ bot.command('cancel', (ctx) => {
 
 bot.command('set', async (ctx) => {
     if (!isAdmin(ctx)) return;
-    const [, k, v] = ctx.message.text.split(/\s+/);
-    const keys = ['miningReward', 'adsReward', 'referralReward', 'minWithdraw', 'feeTon',
+    const parts = ctx.message.text.split(/\s+/);
+    const k = parts[1];
+    const v = parts[2];
+
+    const numericKeys = ['miningReward', 'adsReward', 'referralReward', 'minWithdraw', 'feeTon',
         'minAccountAgeHours', 'maxPendingWd', 'dailyCap', 'adsMinGapSec', 'boostDays'];
-    if (!keys.includes(k) || isNaN(+v)) {
-        return ctx.reply('Usage: /set <key> <number>\nKeys: ' + keys.join(', '));
+    const boolKeys = ['miningEnabled', 'withdrawEnabled', 'maintenance', 'feeAlwaysRequired'];
+
+    if (numericKeys.includes(k)) {
+        if (isNaN(+v)) return ctx.reply(`Usage: /set ${k} <number>`);
+        await setConfig({ [k]: +v });
+        return ctx.reply(`✅ ${k} = ${+v}`);
     }
-    await setConfig({ [k]: +v });
-    ctx.reply(`✅ ${k} = ${+v}`);
+
+    if (boolKeys.includes(k)) {
+        const boolVal = String(v).toLowerCase();
+        if (!['true', 'false', '1', '0', 'on', 'off'].includes(boolVal)) {
+            return ctx.reply(`Usage: /set ${k} true|false`);
+        }
+        const val = ['true', '1', 'on'].includes(boolVal);
+        await setConfig({ [k]: val });
+        return ctx.reply(`✅ ${k} = ${val}`);
+    }
+
+    ctx.reply(
+        `Usage: /set <key> <value>\n\n` +
+        `Numeric keys:\n${numericKeys.join(', ')}\n\n` +
+        `Boolean keys:\n${boolKeys.join(', ')}`
+    );
 });
 
 bot.command('banner', async (ctx) => {
@@ -663,9 +692,7 @@ bot.command('user', async (ctx) => {
     );
 });
 
-// ---- /addbalance (NEW) ----
-// Usage: /addbalance <telegram_id_or_@username> <amount>
-// Amount can be negative to remove.
+// ---- /addbalance ----
 bot.command('addbalance', async (ctx) => {
     if (!isAdmin(ctx)) return;
 
@@ -686,7 +713,6 @@ bot.command('addbalance', async (ctx) => {
     if (/^\d{5,15}$/.test(target)) {
         uid = target;
     } else if (/^@\w+$/.test(target)) {
-        // Look up by username via query (Firestore doesn't have case-insensitive query, so we scan)
         const username = target.slice(1).toLowerCase();
         const snap = await db.collection('users').limit(1000).get();
         for (const d of snap.docs) {
@@ -724,7 +750,6 @@ bot.command('addbalance', async (ctx) => {
         `📊 Change: ${amount > 0 ? '+' : ''}${amount.toLocaleString()}`
     );
 
-    // Notify user
     if (amount > 0) {
         notify(uid, `🎁 Admin credited <b>${amount.toLocaleString()} ${DEFAULTS.symbol}</b> to your balance!`);
     }
@@ -874,7 +899,7 @@ async function finishTask(ctx, s) {
     ctx.reply(`✅ Task "${s.name}" added (${s.verify}).`);
 }
 
-// ---- Broadcast (PROFESSIONAL) ----
+// ---- Broadcast status formatter ----
 function formatBroadcastStatus() {
     if (!broadcastState.running) return 'No broadcast running.';
     const done = broadcastState.sent + broadcastState.failed;
@@ -902,7 +927,6 @@ async function broadcast(text) {
     broadcastState.failed = 0;
     broadcastState.startedAt = Date.now();
 
-    // Count total
     try {
         const countSnap = await db.collection('users').count().get();
         broadcastState.total = countSnap.data().count;
@@ -939,7 +963,6 @@ async function broadcast(text) {
                         log(`⏳ Rate limit — waiting ${wait}ms`);
                         await sleep(wait + 500);
                     } else if (e.code === 403) {
-                        // User blocked bot — skip
                         broadcastState.failed++;
                         success = true;
                     } else {
@@ -966,7 +989,6 @@ async function broadcast(text) {
     broadcastState.running = false;
 }
 
-// ---- /cancelbroadcast ----
 bot.command('cancelbroadcast', (ctx) => {
     if (!isAdmin(ctx)) return;
     if (!broadcastState.running) return ctx.reply('No broadcast running.');
@@ -974,13 +996,11 @@ bot.command('cancelbroadcast', (ctx) => {
     ctx.reply('🛑 Cancelling… current message will finish, then stop.');
 });
 
-// ---- /statusbroadcast ----
 bot.command('statusbroadcast', (ctx) => {
     if (!isAdmin(ctx)) return;
     ctx.reply(formatBroadcastStatus());
 });
 
-// ---- Text handler (sessions) ----
 bot.on('text', async (ctx) => {
     if (!isAdmin(ctx)) return;
     const s = sessions.get(ADMIN_ID);
@@ -1364,7 +1384,7 @@ api.post('/checkin', h(async (req, res) => {
     res.json({ success: true, reward: out.reward, user: pub(out.user) });
 }));
 
-// ---- Tasks (BUG-1 FIXED) ----
+// ---- Tasks — strict chat verification ----
 api.post('/tasks/verify', h(async (req, res) => {
     const cfg = await getConfig();
     await dailyLoad();
@@ -1378,33 +1398,47 @@ api.post('/tasks/verify', h(async (req, res) => {
         throw new AppErr('Already completed');
     }
 
+    // CHAT VERIFICATION — strict enforcement
     if (task.verify === 'chat') {
+        log(`[verify] task=${taskId} chat=${task.chat} user=${id} — checking bot admin...`);
+
         const adminOk = await botIsAdmin(task.chat);
         if (!adminOk) {
-            log('❌ Bot is not admin in', task.chat, '— refusing verify');
+            log(`[verify] ❌ Bot NOT admin in ${task.chat} — refusing verify for task ${taskId}`);
             if (ADMIN_ID) {
                 notify(ADMIN_ID,
-                    `⚠️ <b>Verification blocked</b>\n\nBot is NOT admin in <code>${esc(task.chat)}</code>.\nTask: <b>${esc(task.name)}</b>\n\nPlease add the bot as admin to enable chat verification.`
+                    `⚠️ <b>Verification blocked</b>\n\n` +
+                    `Bot is NOT admin in <code>${esc(task.chat)}</code>.\n` +
+                    `Task: <b>${esc(task.name)}</b> (${taskId})\n` +
+                    `User: <code>${id}</code>\n\n` +
+                    `Please add the bot as admin in that chat.`
                 );
             }
             throw new AppErr('Verification temporarily unavailable. Please try again later.');
         }
 
+        log(`[verify] Bot is admin in ${task.chat} — checking user membership...`);
+
         try {
             const m = await bot.telegram.getChatMember(task.chat, +id);
+            const status = m?.status || null;
             const isMember =
-                ['member', 'administrator', 'creator'].includes(m?.status) ||
-                (m?.status === 'restricted' && m.is_member === true);
+                ['member', 'administrator', 'creator'].includes(status) ||
+                (status === 'restricted' && m?.is_member === true);
+
+            log(`[verify] User ${id} in ${task.chat}: status=${status} isMember=${isMember}`);
+
             if (!isMember) {
                 throw new AppErr('Please join the channel/group first, then press Verify again.');
             }
         } catch (e) {
             if (e instanceof AppErr) throw e;
-            log('getChatMember failed:', e.message);
+            log(`[verify] ❌ getChatMember FAILED for ${task.chat}/${id}: ${e.message}`);
             throw new AppErr('Could not verify membership. Make sure you joined, then try again.');
         }
     }
 
+    // REWARD — only after full verification
     const out = await db.runTransaction(async (tx) => {
         const ref = userRef(id);
         const s = await tx.get(ref);
@@ -1526,7 +1560,9 @@ api.post('/withdraw/intent', h(async (req, res) => {
     }
     if ((u.pendingWd || 0) >= cfg.maxPendingWd) throw new AppErr('Too many pending withdrawals');
 
-    const feeRequired = !u.withdrawFeePaid;
+    // ✅ NEW: fee required on EVERY withdrawal (based on config)
+    const feeRequired = !!cfg.feeAlwaysRequired;
+
     const ref = db.collection('intents').doc();
     const it = {
         userId: id,
@@ -1589,7 +1625,9 @@ api.post('/withdraw/confirm', h(async (req, res) => {
             amount: it.amount,
             wallet: u.wallet,
             status: 'pending',
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            feePaid: !!hash,
+            feeTon: it.amountTon
         });
         tx.update(iRef, { status: 'done' });
         if (hash) tx.set(db.doc('used_payments/' + hash), { userId: id, kind: 'withdraw-fee', at: Date.now() });
@@ -1607,7 +1645,7 @@ api.post('/withdraw/confirm', h(async (req, res) => {
 
     if (ADMIN_ID) {
         notify(ADMIN_ID,
-            `💸 <b>New Withdrawal</b>\n\n👤 @${esc(user.username || '')}\n💰 ${it.amount.toLocaleString()} ${cfg.symbol}\n💳 <code>${user.wallet}</code>\n\nUse /admin → 📋 Pending withdrawals`
+            `💸 <b>New Withdrawal</b>\n\n👤 @${esc(user.username || '')}\n💰 ${it.amount.toLocaleString()} ${cfg.symbol}\n💳 <code>${user.wallet}</code>\n💎 Fee paid: ${hash ? `${it.amountTon} TON ✅` : 'None'}\n\nUse /admin → 📋 Pending withdrawals`
         );
     }
 
