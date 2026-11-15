@@ -285,6 +285,46 @@
                 </div>
             </div>
 
+            <!-- Referral Earnings Card (ADDED) -->
+            <div class="card referral-earnings-card" id="referralEarningsCard">
+                <div class="referral-earnings-inner">
+                    <div class="earnings-icon">
+                        <i class="fas fa-coins" aria-hidden="true"></i>
+                    </div>
+                    <div class="earnings-text">
+                        <div class="earnings-label">EARNED FROM REFERRALS</div>
+                        <div class="earnings-value">
+                            <span id="referralEarnings">0</span>
+                            <small id="referralEarningsSymbol">GROYP</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Referral Link Card (ADDED) -->
+            <div class="card referral-link-card" id="referralLinkCard">
+                <h3 class="card-title">
+                    <i class="fas fa-link" aria-hidden="true"></i>
+                    <span>Your Invite Link</span>
+                </h3>
+                <div class="referral-link-box">
+                    <input
+                        type="text"
+                        id="referralLinkInput"
+                        class="referral-link-input"
+                        readonly
+                        value=""
+                        placeholder="Loading…"
+                        aria-label="Referral link">
+                    <button
+                        id="copyRefLinkBtn"
+                        class="btn-copy-link"
+                        aria-label="Copy referral link">
+                        <i class="fas fa-copy" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
             <!-- Stats -->
             <div class="referral-stats">
                 <div class="stat-card active">
