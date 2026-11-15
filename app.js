@@ -1,504 +1,522 @@
 // ============================================================================
-// GROYPER MINE - EMBER VAULT EDITION (app.js) - FULL VERSION
+// GROYPER MINE - EMBER VAULT v2 - app.js (client)
+// Rules: no userId from client (server reads Telegram initData), 1 read on
+// open (/api/init), 1 write per action, live mining computed from time only.
 // ============================================================================
+'use strict';
 
 const tg = window.Telegram?.WebApp;
-if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor('#0A0B10'); tg.setBackgroundColor('#0A0B10'); }
+if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#0A0B10'); tg.setBackgroundColor('#0A0B10'); tg.disableVerticalSwipes?.(); } catch {} }
 
-const CONFIG = {
-    tokenSymbol: 'GROYP',
-    tokenAddress: 'EQBvcsqG7hqsw-HQ8bemIYrO8I_GLDTSbNiro4WOC7jAG_CH',
-    botUsername: 'GroyperMinebot',
-    MINING_REWARD: 20,
-    MINING_COOLDOWN_MS: 6 * 60 * 60 * 1000,
-    REWARD_PER_AD: 2,
-    MAX_ADS_PER_BATCH: 10,
-    ADS_BATCH_REWARD: 20,
-    ADS_COOLDOWN_MS: 6 * 60 * 60 * 1000,
-    REFERRAL_REWARD: 75,
-    MILESTONES: [{ count: 100, reward: 2500 }, { count: 250, reward: 5000 }, { count: 500, reward: 10000 }],
-    MIN_WITHDRAW: 2000,
-    WITHDRAW_FEE_TON: 0.1,
-    BOOSTS: {
-        bronze: { price: 1, multiplier: 2, name: 'BRONZE', icon: '🥉' },
-        silver: { price: 5, multiplier: 5, name: 'SILVER', icon: '🥈' },
-        gold: { price: 10, multiplier: 12, name: 'GOLD', icon: '🥇' }
-    }
+// ---------- Defaults (overridden by server config from /api/init) ----------
+const CFG = {
+  symbol: 'GROYP', bot: 'GroyperMinebot', app: 'Mine',
+  miningReward: 20, cooldownMs: 6 * 3600e3,
+  adsPerBatch: 10, adsReward: 20, adsCooldownMs: 6 * 3600e3,
+  minWithdraw: 2000, feeTon: 0.1,
+  milestones: [{ count: 50, reward: 1000 }, { count: 100, reward: 2500 }, { count: 250, reward: 5000 }, { count: 500, reward: 10000 }, { count: 1000, reward: 25000 }],
+  boosts: { bronze: { price: 1, mult: 2, name: 'SPARK' }, silver: { price: 2.5, mult: 5, name: 'BLAZE' }, gold: { price: 10, mult: 12, name: 'INFERNO' } },
+  referralReward: 75
 };
 
-let currentUser = null;
-let userId = null;
-let tonConnected = false;
-let tonWalletAddress = null;
-let isClaimingMining = false;
-let isClaimingAds = false;
-let isProcessingWithdraw = false;
-let adSequenceActive = false;
-let miningTimer = null;
-let livePriceData = { price: 0, change24h: 0 };
-let adsState = { watched: 0, accumulated: 0 };
+// ---------- i18n ----------
+const I18N = {
+  en: { ready: 'READY', claim: 'CLAIM', claimed: 'Claimed', notReady: 'Not ready yet', netErr: 'Network error', openTg: 'Open from Telegram', copied: 'Copied!', connect: 'Connect wallet first', watch: 'WATCH AD', noAd: 'No ad available', verifying: 'Verifying...', done: 'DONE', start: 'START', verify: 'VERIFY', min: 'Minimum', insufficient: 'Insufficient balance', processing: 'PROCESSING...', withdraw: 'WITHDRAW', submitted: 'Withdrawal submitted!', noTasks: 'No tasks available', noRefs: 'No referrals yet', noWd: 'No withdrawals yet', active: 'ACTIVE', inactive: 'INACTIVE', next: 'Next batch in', offline: 'Offline', more: 'Load more', checkin: 'Daily check-in', streak: 'Day streak', payFail: 'Payment cancelled', boostOk: 'Boost activated!', pending: 'PENDING', approved: 'APPROVED', paid: 'PAID', rejected: 'REJECTED', maint: 'Under maintenance', invite: 'Join Groyper Mine and start mining!', confirmBoost: 'Activate boost for' },
+  ar: { ready: 'جاهز', claim: 'استلام', claimed: 'تم الاستلام', notReady: 'غير جاهز بعد', netErr: 'خطأ في الشبكة', openTg: 'افتح من تيليجرام', copied: 'تم النسخ!', connect: 'اربط المحفظة أولاً', watch: 'شاهد إعلانًا', noAd: 'لا يوجد إعلان متاح', verifying: 'جارٍ التحقق...', done: 'تم', start: 'ابدأ', verify: 'تحقق', min: 'الحد الأدنى', insufficient: 'الرصيد غير كافٍ', processing: 'جارٍ المعالجة...', withdraw: 'سحب', submitted: 'تم إرسال طلب السحب!', noTasks: 'لا توجد مهام', noRefs: 'لا توجد إحالات بعد', noWd: 'لا توجد سحوبات بعد', active: 'نشط', inactive: 'غير نشط', next: 'الدفعة التالية بعد', offline: 'غير متصل', more: 'عرض المزيد', checkin: 'الحضور اليومي', streak: 'أيام متتالية', payFail: 'تم إلغاء الدفع', boostOk: 'تم تفعيل الترقية!', pending: 'معلق', approved: 'مقبول', paid: 'مدفوع', rejected: 'مرفوض', maint: 'التطبيق تحت الصيانة', invite: 'انضم إلى Groyper Mine وابدأ التعدين!', confirmBoost: 'تفعيل الترقية مقابل' }
+};
+const lang = (tg?.initDataUnsafe?.user?.language_code || 'en').startsWith('ar') ? 'ar' : 'en';
+const t = k => I18N[lang][k] || I18N.en[k] || k;
+if (lang === 'ar') { document.documentElement.dir = 'rtl'; document.documentElement.lang = 'ar'; }
 
-// ============================================================================
-// UTILITIES
-// ============================================================================
-function showToast(msg, type = 'info', dur = 3000) {
-    const t = document.getElementById('toast'), m = document.getElementById('toastMessage');
-    if (!t || !m) return;
-    m.textContent = msg;
-    t.classList.remove('hidden');
-    t.style.borderColor = type === 'success' ? 'var(--success)' : type === 'error' ? 'var(--danger)' : 'var(--border-light)';
-    clearTimeout(t._t);
-    t._t = setTimeout(() => t.classList.add('hidden'), dur);
+// ---------- State ----------
+const S = {
+  user: null, tasks: [], price: { usd: 0, change: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 },
+  wallet: null, serverOffset: 0, busy: {}, refs: { items: [], cursor: null, loaded: false },
+  wd: { items: [], cursor: null, loaded: false }, shownBalance: 0, booted: false
+};
+const $ = id => document.getElementById(id);
+const setText = (id, v) => { const e = $(id); if (e && e.textContent !== String(v)) e.textContent = v; };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const nowMs = () => Date.now() + S.serverOffset;
+const fmt = (n, d = 0) => Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: d });
+const usd = n => { const v = n * (S.price.usd || 0); return '≈ $' + (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2)); };
+const clock = ms => { if (ms <= 0) return '00:00:00'; const s = Math.floor(ms / 1000); return [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(x => String(x).padStart(2, '0')).join(':'); };
+const prefersReduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function haptic(type = 'light') {
+  const h = tg?.HapticFeedback; if (!h) return;
+  if (type === 'success' || type === 'error' || type === 'warning') h.notificationOccurred(type); else h.impactOccurred(type);
 }
 
-function formatTimeLeft(ms) {
-    if (ms <= 0) return '00:00:00';
-    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+function toast(msg, type = 'info', dur = 3000) {
+  const el = $('toast'), m = $('toastMessage'); if (!el || !m) return;
+  m.textContent = msg; el.classList.remove('hidden');
+  el.style.borderColor = type === 'success' ? 'var(--success)' : type === 'error' ? 'var(--danger)' : 'var(--border-light)';
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.add('hidden'), dur);
 }
 
-function vibrate(type = 'light') {
-    if (tg?.HapticFeedback) {
-        if (type === 'light') tg.HapticFeedback.impactOccurred('light');
-        if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
-        if (type === 'error') tg.HapticFeedback.notificationOccurred('error');
-    }
-}
+// ---------- Local cache (instant paint, then refresh from server) ----------
+const LS = {
+  get(k) { try { return JSON.parse(localStorage.getItem('gm_' + k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem('gm_' + k, JSON.stringify(v)); } catch {} }
+};
 
-async function apiRequest(url, opts = {}) {
-    try {
-        const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
-        return await res.json();
-    } catch (e) { return { success: false, error: 'Network error' }; }
-}
-
-// ============================================================================
-// TON CONNECT
-// ============================================================================
-function initTonConnect() {
-    if (typeof TON_CONNECT_UI === 'undefined') {
-        console.error('TON_CONNECT_UI not loaded');
-        return;
-    }
-    try {
-        window.tonConnectUI = new TON_CONNECT_UI.TonConnectUI({
-            manifestUrl: window.location.origin + '/tonconnect-manifest.json',
-            buttonRootId: 'ton-connect-btn'
-        });
-        window.tonConnectUI.onStatusChange(async wallet => {
-            if (wallet) {
-                tonConnected = true;
-                tonWalletAddress = wallet.account.address;
-                updateHeaderWallet();
-                await checkAndProceed();
-            } else {
-                tonConnected = false;
-                tonWalletAddress = null;
-            }
-        });
-    } catch (e) { console.error('TonConnect Error:', e); }
-}
-
-// ============================================================================
-// USER DATA
-// ============================================================================
-async function fetchUserData() {
-    if (!userId) return;
-    const res = await apiRequest(`/api/user/${userId}`);
-    if (res.success) {
-        currentUser = res.user;
-        updateHeaderWallet();
-        updateMiningUI();
-        initAdsState();
-        renderTasks(res.user.tasks || [], res.user.completedTasks || []);
-        renderReferral();
-        renderWallet();
-    }
-}
-
-async function checkAndProceed() {
-    if (!tonConnected || !tonWalletAddress) return;
-    const res = await apiRequest('/api/user/register', {
-        method: 'POST',
-        body: JSON.stringify({
-            userId,
-            username: tg?.initDataUnsafe?.user?.username || 'user',
-            firstName: tg?.initDataUnsafe?.user?.first_name || 'User',
-            avatar: tg?.initDataUnsafe?.user?.photo_url || '',
-            walletAddress: tonWalletAddress,
-            startParam: tg?.initDataUnsafe?.start_param || null
-        })
+// ---------- API (auth = Telegram initData, verified on server) ----------
+async function api(path, { method = 'GET', body } = {}) {
+  try {
+    const res = await fetch('/api' + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: 'tma ' + (tg?.initData || '') },
+      body: body ? JSON.stringify(body) : undefined
     });
-    if (res.success) {
-        document.getElementById('onboardingScreen').classList.remove('active');
-        document.getElementById('mainApp').style.display = 'block';
-        document.getElementById('userAvatar').src = tg?.initDataUnsafe?.user?.photo_url || 'https://ui-avatars.com/api/?name=U&background=FF4D00&color=fff';
-        document.getElementById('userName').textContent = tg?.initDataUnsafe?.user?.first_name || 'User';
-        document.getElementById('userHandle').textContent = `@${tg?.initDataUnsafe?.user?.username || 'user'}`;
-        await fetchTokenPrice();
-        await fetchUserData();
-        startMiningTimer();
-    } else {
-        showToast('Registration failed', 'error');
-    }
+    const data = await res.json().catch(() => ({}));
+    setOffline(false);
+    if (res.status === 503) { showMaintenance(); return { ok: false, error: t('maint') }; }
+    if (!res.ok || data.success === false) return { ok: false, error: data.error || t('netErr'), data };
+    return { ok: true, data };
+  } catch { setOffline(true); return { ok: false, error: t('netErr') }; }
+}
+
+function setOffline(off) {
+  let b = $('offlineBadge');
+  if (!b) { b = document.createElement('div'); b.id = 'offlineBadge'; b.style.cssText = 'position:fixed;top:env(safe-area-inset-top,0);left:50%;transform:translateX(-50%);background:#FF4D00;color:#fff;font:600 11px Inter,sans-serif;padding:3px 12px;border-radius:0 0 10px 10px;z-index:9999;display:none'; document.body.appendChild(b); }
+  b.textContent = '● ' + t('offline'); b.style.display = off ? 'block' : 'none';
+}
+
+function showMaintenance() {
+  document.body.innerHTML = `<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#F2F3F7;font:600 18px Inter,sans-serif;text-align:center;padding:24px">🔧<br>${esc(t('maint'))}</div>`;
+}
+
+// ---------- Single guard against double taps ----------
+async function once(key, fn) {
+  if (S.busy[key]) return; S.busy[key] = true;
+  try { return await fn(); } finally { S.busy[key] = false; }
 }
 
 // ============================================================================
-// DEXSCREENER (Using Correct API Endpoint)
+// MINING (live, computed from time only - zero DB writes while mining)
 // ============================================================================
-async function fetchTokenPrice() {
-    try {
-        console.log('Fetching token price from DexScreener...');
-        const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${CONFIG.tokenAddress}`);
-        const data = await res.json();
-        
-        if (data && data.pairs && data.pairs.length > 0) {
-            // Sort by liquidity (USD) descending to get the main pair
-            const bestPair = data.pairs.sort((a, b) => (parseFloat(b.liquidity?.usd) || 0) - (parseFloat(a.liquidity?.usd) || 0))[0];
-            
-            livePriceData = { 
-                price: parseFloat(bestPair.priceUsd) || 0, 
-                change24h: parseFloat(bestPair.priceChange?.h24) || 0 
-            };
-            
-            document.getElementById('tokenPrice').textContent = `$${livePriceData.price.toFixed(8)}`;
-            document.getElementById('tokenMarketCap').textContent = `$${(parseFloat(bestPair.marketCap) || 0).toLocaleString()}`;
-            document.getElementById('tokenFdv').textContent = `$${(parseFloat(bestPair.fdv) || 0).toLocaleString()}`;
-            document.getElementById('tokenLiquidity').textContent = `$${(parseFloat(bestPair.liquidity?.usd) || 0).toLocaleString()}`;
-            document.getElementById('tokenVolume').textContent = `$${(parseFloat(bestPair.volume?.h24) || 0).toLocaleString()}`;
-            
-            const ch = document.getElementById('tokenChange');
-            ch.textContent = `${livePriceData.change24h >= 0 ? '+' : ''}${livePriceData.change24h.toFixed(2)}%`;
-            ch.className = `token-change ${livePriceData.change24h >= 0 ? 'positive' : 'negative'}`;
-            
-            updateHeaderWallet();
-            console.log('Token price updated:', livePriceData);
-        } else {
-            console.error('DexScreener: No pairs found for this token.', data);
-            showToast('Could not load token data', 'error');
-        }
-    } catch (e) { 
-        console.error('DexScreener Error:', e); 
-        showToast('Network error loading token', 'error');
-    }
+const mult = () => S.user?.boostMultiplier && (!S.user.boostExpiresAt || S.user.boostExpiresAt > nowMs()) ? S.user.boostMultiplier : 1;
+
+function miningState() {
+  if (!S.user) return { elapsed: 0, progress: 0, accrued: 0, ready: false, remaining: CFG.cooldownMs, full: 0 };
+  const elapsed = Math.max(0, nowMs() - (S.user.lastMiningClaim || 0));
+  const capped = Math.min(elapsed, CFG.cooldownMs);
+  const full = CFG.miningReward * mult();
+  return { elapsed, progress: capped / CFG.cooldownMs, accrued: full * (capped / CFG.cooldownMs), ready: elapsed >= CFG.cooldownMs, remaining: CFG.cooldownMs - capped, full };
 }
 
-// ============================================================================
-// UI
-// ============================================================================
-function updateHeaderWallet() {
-    if (currentUser) {
-        document.getElementById('headerBalance').textContent = `${(currentUser.balance || 0).toLocaleString()} ${CONFIG.tokenSymbol}`;
-        document.getElementById('headerValue').textContent = `≈ $${((currentUser.balance || 0) * livePriceData.price).toFixed(2)}`;
-    }
-    if (tonWalletAddress) {
-        document.getElementById('headerAddress').innerHTML = `<i class="fas fa-wallet"></i> ${tonWalletAddress.slice(0, 4)}...${tonWalletAddress.slice(-4)}`;
-    }
-}
-
-// ============================================================================
-// MINING
-// ============================================================================
-function getMiningData() {
-    if (!currentUser) return { canClaim: false, remainingMs: 0, progress: 0, reward: 0 };
-    const el = Date.now() - (currentUser.lastMiningClaim || 0);
-    const rem = Math.max(0, CONFIG.MINING_COOLDOWN_MS - el);
-    return {
-        canClaim: rem <= 0,
-        remainingMs: rem,
-        progress: Math.min(100, (el / CONFIG.MINING_COOLDOWN_MS) * 100),
-        reward: CONFIG.MINING_REWARD * (currentUser.boostMultiplier || 1)
-    };
-}
-
-function updateMiningUI() {
-    if (!currentUser) return;
-    const d = getMiningData(), ring = document.getElementById('ringProgress');
-    if (ring) {
-        const c = 2 * Math.PI * 90;
-        ring.style.strokeDashoffset = c - (d.progress / 100) * c;
-        ring.style.strokeDasharray = c;
-        ring.classList.toggle('active', d.canClaim);
-    }
-    document.getElementById('minedAmount').textContent = d.reward;
-    document.getElementById('minedUsd').textContent = `≈ $${(d.reward * livePriceData.price).toFixed(2)}`;
-    document.getElementById('miningTimer').textContent = d.canClaim ? 'READY' : formatTimeLeft(d.remainingMs);
-    document.getElementById('hashPower').textContent = `${currentUser.boostMultiplier || 1}x`;
-    const b = document.getElementById('claimMiningBtn');
-    b.disabled = !d.canClaim;
-    b.innerHTML = d.canClaim ? `<i class="fas fa-fire"></i> CLAIM ${d.reward} ${CONFIG.tokenSymbol}` : `<i class="fas fa-fire"></i> CLAIM MINING`;
-}
-
-function startMiningTimer() {
-    if (miningTimer) clearInterval(miningTimer);
-    miningTimer = setInterval(updateMiningUI, 1000);
+const RING_C = 2 * Math.PI * 90;
+function renderMining() {
+  if (!S.user) return;
+  const m = miningState(), ring = $('ringProgress');
+  if (ring) { ring.style.strokeDasharray = RING_C; ring.style.strokeDashoffset = RING_C * (1 - m.progress); ring.classList.toggle('active', m.ready); }
+  setText('minedAmount', m.accrued.toFixed(m.ready ? 0 : 3));
+  setText('minedUsd', usd(m.accrued));
+  setText('miningTimer', m.ready ? t('ready') : clock(m.remaining));
+  setText('hashPower', mult() + 'x');
+  const b = $('claimMiningBtn');
+  if (b) { b.disabled = !m.ready; b.classList.toggle('ready', m.ready); b.innerHTML = `<i class="fas fa-fire"></i> ${t('claim')}${m.ready ? ' ' + fmt(m.full) + ' ' + CFG.symbol : ''}`; }
 }
 
 async function claimMining() {
-    if (isClaimingMining) return;
-    if (!getMiningData().canClaim) return showToast('Not ready', 'warning');
-    isClaimingMining = true;
-    const res = await apiRequest('/api/mining/claim', { method: 'POST', body: JSON.stringify({ userId }) });
-    if (res.success) {
-        showToast(`✅ +${res.reward} claimed!`, 'success');
-        vibrate('success');
-        await fetchUserData();
-    } else showToast(res.error, 'error');
-    isClaimingMining = false;
+  const m = miningState(); if (!m.ready) return toast(t('notReady'), 'error');
+  return once('mine', async () => {
+    // Optimistic UI
+    const prev = { ...S.user };
+    S.user.balance += m.full; S.user.lastMiningClaim = nowMs();
+    renderAll(); sparks($('claimMiningBtn')); haptic('success');
+    const r = await api('/mining/claim', { method: 'POST' });
+    if (r.ok) { merge(r.data.user); toast(`✅ +${fmt(r.data.reward)} ${CFG.symbol}`, 'success'); }
+    else { S.user = prev; toast(r.error, 'error'); haptic('error'); }
+    renderAll();
+  });
 }
 
 // ============================================================================
-// ADS
+// ADS (server issues ymid, ad network postbacks to server, server counts)
 // ============================================================================
-function initAdsState() {
-    if (!currentUser) return;
-    adsState.watched = currentUser.adsWatched || 0;
-    adsState.accumulated = currentUser.adsAccumulated || 0;
-    renderAdsUI();
-}
+const adsCooldownLeft = () => Math.max(0, (S.user?.adsCooldownUntil || 0) - nowMs());
 
-function renderAdsUI() {
-    const c = document.getElementById('adsSegments');
-    let html = '';
-    for (let i = 0; i < CONFIG.MAX_ADS_PER_BATCH; i++) html += `<div class="ads-segment ${i < adsState.watched ? 'active' : ''}"></div>`;
-    c.innerHTML = html;
-    document.getElementById('adsAccumulated').textContent = `${adsState.accumulated} ${CONFIG.tokenSymbol}`;
-    document.getElementById('adsCounter').textContent = `${adsState.watched}/${CONFIG.MAX_ADS_PER_BATCH}`;
-    const complete = adsState.watched >= CONFIG.MAX_ADS_PER_BATCH;
-    document.getElementById('watchAdBtn').style.display = complete ? 'none' : 'flex';
-    document.getElementById('claimAdsBtn').style.display = complete ? 'flex' : 'none';
+function renderAds() {
+  if (!S.user) return;
+  const w = S.user.adsWatched || 0, full = w >= CFG.adsPerBatch, cd = adsCooldownLeft();
+  const seg = $('adsSegments');
+  if (seg) {
+    if (seg.children.length !== CFG.adsPerBatch) seg.innerHTML = '<div class="ads-segment"></div>'.repeat(CFG.adsPerBatch);
+    [...seg.children].forEach((c, i) => c.classList.toggle('active', i < w));
+  }
+  setText('adsAccumulated', `${fmt(w * (CFG.adsReward / CFG.adsPerBatch))} ${CFG.symbol}`);
+  setText('adsCounter', `${w}/${CFG.adsPerBatch}`);
+  const wb = $('watchAdBtn'), cb = $('claimAdsBtn'), cdEl = $('adsCooldown');
+  if (wb) { wb.style.display = !full && cd <= 0 ? 'flex' : 'none'; wb.innerHTML = `<i class="fas fa-play"></i> ${t('watch')} (+${CFG.adsReward / CFG.adsPerBatch})`; }
+  if (cb) { cb.style.display = full && cd <= 0 ? 'flex' : 'none'; cb.innerHTML = `<i class="fas fa-check"></i> ${t('claim')} ${CFG.adsReward} ${CFG.symbol}`; }
+  if (cdEl) { cdEl.style.display = cd > 0 ? 'block' : 'none'; setText('adsTimer', clock(cd)); }
 }
 
 async function watchAd() {
-    if (adSequenceActive || adsState.watched >= CONFIG.MAX_ADS_PER_BATCH) return;
-    adSequenceActive = true;
-    showToast('Loading ad...', 'info');
+  if (!S.user || (S.user.adsWatched || 0) >= CFG.adsPerBatch || adsCooldownLeft() > 0) return;
+  return once('ad', async () => {
+    const s = await api('/ads/start', { method: 'POST' });
+    if (!s.ok) return toast(s.error, 'error');
     let ok = false;
-    try {
-        if (typeof window.show_12265394 === 'function') { await window.show_12265394(); ok = true; }
-    } catch (e) {}
-    if (!ok && window.TelegramAdsController) {
-        try {
-            await new Promise((res, rej) => new TelegramAdsController().showRewardedVideo({ onReward: () => { ok = true; res(); }, onError: rej }));
-        } catch (e) {}
-    }
-    if (ok) {
-        adsState.watched++; adsState.accumulated += CONFIG.REWARD_PER_AD;
-        vibrate('light');
-        await apiRequest('/api/user/update', { method: 'POST', body: JSON.stringify({ userId, updates: { adsWatched: adsState.watched, adsAccumulated: adsState.accumulated } }) });
-        renderAdsUI();
-        showToast(`+${CONFIG.REWARD_PER_AD} ${CONFIG.tokenSymbol}!`, 'success');
-    } else showToast('No ad available', 'error');
-    adSequenceActive = false;
+    try { if (typeof window.show_12265394 === 'function') { await window.show_12265394({ ymid: s.data.ymid }); ok = true; } } catch {}
+    if (!ok) return toast(t('noAd'), 'error');
+    const r = await api('/ads/watch', { method: 'POST', body: { ymid: s.data.ymid } });
+    if (r.ok) { S.user.adsWatched = r.data.watched; haptic('light'); renderAds(); }
+    else toast(r.error, 'error');
+  });
 }
 
-async function claimAdsReward() {
-    if (isClaimingAds || adsState.watched < CONFIG.MAX_ADS_PER_BATCH) return;
-    isClaimingAds = true;
-    const res = await apiRequest('/api/ads/claim', { method: 'POST', body: JSON.stringify({ userId }) });
-    if (res.success) {
-        showToast(`✅ +${res.reward} added!`, 'success');
-        await fetchUserData();
-    }
-    isClaimingAds = false;
+async function claimAds() {
+  return once('adsClaim', async () => {
+    const r = await api('/ads/claim', { method: 'POST' });
+    if (r.ok) { merge(r.data.user); toast(`✅ +${r.data.reward} ${CFG.symbol}`, 'success'); haptic('success'); sparks($('claimAdsBtn')); }
+    else toast(r.error, 'error');
+    renderAll();
+  });
 }
 
 // ============================================================================
-// TASKS
+// DAILY CHECK-IN / STREAK (needs optional #checkinBtn, #streakCount)
 // ============================================================================
-function renderTasks(tasks, completed) {
-    const c = document.getElementById('taskList');
-    if (!c) return;
-    if (tasks.length === 0) return c.innerHTML = '<div class="empty-state">No tasks available</div>';
-    c.innerHTML = tasks.map(t => {
-        const done = completed.includes(t.id);
-        return `
-            <div class="task-item" data-task-id="${t.id}">
-                <div class="task-icon"><i class="fas ${t.icon || 'fa-link'}"></i></div>
-                <div class="task-info">
-                    <div class="task-name">${t.name}</div>
-                    <div class="task-reward">+${t.reward} ${CONFIG.tokenSymbol}</div>
-                </div>
-                <button class="task-btn ${done ? 'completed' : ''}" onclick="window.startTask('${t.id}')" ${done ? 'disabled' : ''}>
-                    ${done ? '✓ DONE' : 'START'}
-                </button>
-            </div>`;
-    }).join('');
+function renderCheckin() {
+  const b = $('checkinBtn'); if (!b || !S.user) return;
+  const today = Math.floor(nowMs() / 86400e3), done = (S.user.lastCheckinDay || 0) === today;
+  b.disabled = done; b.textContent = done ? '✓ ' + t('done') : t('checkin');
+  setText('streakCount', `${S.user.streak || 0} ${t('streak')}`);
 }
-
-window.startTask = async (taskId) => {
-    const task = currentUser.tasks.find(t => t.id === taskId);
-    if (!task) return;
-    window.open(task.url, '_blank');
-    showToast('Complete task, then click Verify', 'info');
-    const item = document.querySelector(`[data-task-id="${taskId}"]`);
-    if (item) {
-        const btn = item.querySelector('.task-btn');
-        btn.textContent = 'VERIFY';
-        btn.onclick = () => verifyTask(taskId);
-    }
-};
-
-async function verifyTask(taskId) {
-    showToast('Verifying...', 'info');
-    const res = await apiRequest('/api/tasks/verify', { method: 'POST', body: JSON.stringify({ userId, taskId }) });
-    if (res.success) {
-        showToast(`✅ +${res.reward} earned!`, 'success');
-        vibrate('success');
-        await fetchUserData();
-    } else showToast(res.error, 'error');
+async function checkin() {
+  return once('checkin', async () => {
+    const r = await api('/checkin', { method: 'POST' });
+    if (r.ok) { merge(r.data.user); toast(`🔥 +${r.data.reward} ${CFG.symbol}`, 'success'); haptic('success'); }
+    else toast(r.error, 'error');
+    renderAll();
+  });
 }
 
 // ============================================================================
-// REFERRAL
+// TASKS (server-side verification mandatory)
 // ============================================================================
+const taskState = {}; // taskId -> 'opened'
+function renderTasks() {
+  const c = $('taskList'); if (!c) return;
+  if (!S.tasks.length) return void (c.innerHTML = `<div class="empty-state">${t('noTasks')}</div>`);
+  const done = new Set(S.user?.completedTasks || []);
+  c.innerHTML = S.tasks.map(k => {
+    const d = done.has(k.id), opened = taskState[k.id];
+    return `<div class="task-item ${d ? 'done' : ''}" data-task-id="${esc(k.id)}">
+      <div class="task-icon"><i class="${esc(k.iconClass || 'fas fa-link')}"></i></div>
+      <div class="task-info"><div class="task-name">${esc(k.name)}</div><div class="task-reward">+${fmt(k.reward)} ${CFG.symbol}</div></div>
+      <button class="task-btn ${d ? 'completed' : ''}" data-act="${opened ? 'verify' : 'start'}" ${d ? 'disabled' : ''}>${d ? '✓ ' + t('done') : opened ? t('verify') : t('start')}</button></div>`;
+  }).join('');
+}
+
+async function taskAction(id, act) {
+  const k = S.tasks.find(x => x.id === id); if (!k) return;
+  if (act === 'start') {
+    if (/^https:\/\/t\.me\//.test(k.url)) tg?.openTelegramLink ? tg.openTelegramLink(k.url) : window.open(k.url, '_blank');
+    else tg?.openLink ? tg.openLink(k.url) : window.open(k.url, '_blank');
+    taskState[id] = 'opened'; renderTasks(); return;
+  }
+  return once('task' + id, async () => {
+    toast(t('verifying'));
+    const r = await api('/tasks/verify', { method: 'POST', body: { taskId: id } });
+    if (r.ok) { merge(r.data.user); toast(`✅ +${fmt(r.data.reward)} ${CFG.symbol}`, 'success'); haptic('success'); }
+    else { toast(r.error, 'error'); haptic('error'); }
+    renderAll();
+  });
+}
+
+// ============================================================================
+// REFERRALS (lazy + paginated)
+// ============================================================================
+function refLink() { return `https://t.me/${CFG.bot}/${CFG.app}?startapp=${S.user?.userId || ''}`; }
+
 function renderReferral() {
-    if (!currentUser) return;
-    document.getElementById('activeReferrals').textContent = currentUser.activeReferrals || 0;
-    document.getElementById('inactiveReferrals').textContent = currentUser.inactiveReferrals || 0;
-    const ml = document.getElementById('milestoneList');
-    const claimed = currentUser.claimedMilestones || [];
-    ml.innerHTML = CONFIG.MILESTONES.map(m => `
-        <div class="milestone-item ${claimed.includes(m.count) ? 'completed' : ''}">
-            <div class="milestone-icon">${claimed.includes(m.count) ? '✅' : '🔒'}</div>
-            <div class="milestone-info">
-                <div class="milestone-count">${m.count} Referrals</div>
-                <div class="milestone-reward">+${m.reward} ${CONFIG.tokenSymbol}</div>
-            </div>
-        </div>`).join('');
-    const rl = document.getElementById('referralList');
-    if ((currentUser.referrals || []).length === 0) rl.innerHTML = '<div class="empty-state">No referrals yet</div>';
-    else rl.innerHTML = currentUser.referrals.map(r => `
-        <div class="referral-item">
-            <img src="https://ui-avatars.com/api/?name=${r.username}&background=FF4D00&color=fff">
-            <span class="referral-item-name">@${r.username}</span>
-            <span class="referral-status ${r.isActive ? 'active' : 'inactive'}">${r.isActive ? 'ACTIVE' : 'INACTIVE'}</span>
-        </div>`).join('');
+  if (!S.user) return;
+  const act = S.user.activeReferrals || 0, ina = S.user.inactiveReferrals || 0, total = act;
+  setText('activeReferrals', act); setText('inactiveReferrals', ina);
+  const claimed = new Set(S.user.claimedMilestones || []);
+  const next = CFG.milestones.find(m => total < m.count);
+  const ml = $('milestoneList');
+  if (ml) ml.innerHTML = CFG.milestones.map(m => {
+    const reached = total >= m.count, got = claimed.has(m.count), pct = Math.min(100, total / m.count * 100);
+    return `<div class="milestone-item ${got ? 'completed' : ''} ${next === m ? 'current' : ''}">
+      <div class="milestone-icon">${got ? '✅' : reached ? '🎁' : '🔒'}</div>
+      <div class="milestone-info"><div class="milestone-count">${fmt(m.count)}</div><div class="milestone-reward">+${fmt(m.reward)} ${CFG.symbol}</div>
+      <div class="milestone-bar"><i style="width:${pct}%"></i></div></div>
+      ${reached && !got ? `<button class="task-btn" data-ms="${m.count}">${t('claim')}</button>` : ''}</div>`;
+  }).join('');
+  renderRefList();
+}
+
+function renderRefList() {
+  const rl = $('referralList'); if (!rl) return;
+  if (!S.refs.items.length) return void (rl.innerHTML = `<div class="empty-state">${t('noRefs')}</div>`);
+  rl.innerHTML = S.refs.items.map(r => `<div class="referral-item"><img loading="lazy" alt="" src="https://ui-avatars.com/api/?name=${encodeURIComponent(r.username || 'U')}&background=FF4D00&color=fff&size=64">
+    <span class="referral-item-name">@${esc(r.username)}</span><span class="referral-status ${r.active ? 'active' : 'inactive'}">${r.active ? t('active') : t('inactive')}</span></div>`).join('')
+    + (S.refs.cursor ? `<button class="btn-secondary" id="moreRefs">${t('more')}</button>` : '');
+}
+
+async function loadRefs(more = false) {
+  if (S.refs.loaded && !more) return;
+  return once('refs', async () => {
+    const r = await api('/referrals' + (more && S.refs.cursor ? '?cursor=' + encodeURIComponent(S.refs.cursor) : ''));
+    if (!r.ok) return;
+    S.refs.items = more ? S.refs.items.concat(r.data.items) : r.data.items; S.refs.cursor = r.data.cursor || null; S.refs.loaded = true;
+    renderRefList();
+  });
+}
+
+async function claimMilestone(count) {
+  return once('ms' + count, async () => {
+    const r = await api('/referrals/milestone', { method: 'POST', body: { count: +count } });
+    if (r.ok) { merge(r.data.user); toast(`🎉 +${fmt(r.data.reward)} ${CFG.symbol}`, 'success'); haptic('success'); confetti(); }
+    else toast(r.error, 'error');
+    renderAll();
+  });
 }
 
 // ============================================================================
-// WALLET
+// WALLET / WITHDRAW
 // ============================================================================
 function renderWallet() {
-    if (!currentUser) return;
-    document.getElementById('walletUserName').textContent = currentUser.username || 'User';
-    document.getElementById('walletUserHandle').textContent = `@${currentUser.username || 'user'}`;
-    document.getElementById('walletAvatar').src = tg?.initDataUnsafe?.user?.photo_url || 'https://ui-avatars.com/api/?name=U&background=FF4D00&color=fff';
-    document.getElementById('totalWithdrawn').textContent = `${(currentUser.totalWithdrawn || 0).toLocaleString()} ${CONFIG.tokenSymbol}`;
-    document.getElementById('availableToWithdraw').textContent = `${(currentUser.balance || 0).toLocaleString()} ${CONFIG.tokenSymbol}`;
-    document.getElementById('withdrawWalletAddress').textContent = tonWalletAddress ? `${tonWalletAddress.slice(0, 6)}...${tonWalletAddress.slice(-6)}` : 'Not connected';
-    const h = document.getElementById('withdrawHistory');
-    if ((currentUser.withdrawals || []).length === 0) h.innerHTML = '<div class="empty-state">No withdrawals yet</div>';
-    else h.innerHTML = currentUser.withdrawals.map(w => `
-        <div class="history-item">
-            <span class="history-amount">${w.amount} ${CONFIG.tokenSymbol}</span>
-            <span class="history-status ${w.status}">${w.status.toUpperCase()}</span>
-        </div>`).join('');
+  if (!S.user) return;
+  const u = tg?.initDataUnsafe?.user || {};
+  const av = $('walletAvatar'); if (av && !av.src.includes('http')) av.src = u.photo_url || 'https://ui-avatars.com/api/?name=U&background=FF4D00&color=fff';
+  setText('walletUserName', u.first_name || S.user.firstName || 'User');
+  setText('walletUserHandle', '@' + (u.username || S.user.username || 'user'));
+  setText('totalWithdrawn', `${fmt(S.user.totalWithdrawn)} ${CFG.symbol}`);
+  setText('availableToWithdraw', `${fmt(S.user.balance)} ${CFG.symbol}`);
+  setText('withdrawWalletAddress', S.wallet ? short(S.wallet, 6) : '—');
+  const inp = $('withdrawAmount'), hint = document.querySelector('.input-hint');
+  if (hint) hint.textContent = `${t('min')}: ${fmt(CFG.minWithdraw)} ${CFG.symbol}`;
+  if (inp) { const v = parseFloat(inp.value); inp.classList.toggle('invalid', !!inp.value && (v < CFG.minWithdraw || v > S.user.balance)); inp.classList.toggle('valid', !!inp.value && v >= CFG.minWithdraw && v <= S.user.balance); }
+  renderWdList();
+}
+
+function renderWdList() {
+  const h = $('withdrawHistory'); if (!h) return;
+  if (!S.wd.items.length) return void (h.innerHTML = `<div class="empty-state">${t('noWd')}</div>`);
+  h.innerHTML = S.wd.items.map(w => `<div class="history-item"><div><span class="history-amount">${fmt(w.amount)} ${CFG.symbol}</span><small style="display:block;opacity:.6">${new Date(w.createdAt).toLocaleDateString()}</small></div>
+    <span class="history-status ${esc(w.status)}">${t(w.status)}</span></div>`).join('')
+    + (S.wd.cursor ? `<button class="btn-secondary" id="moreWd">${t('more')}</button>` : '');
+}
+
+async function loadWithdrawals(more = false) {
+  if (S.wd.loaded && !more) return;
+  return once('wd', async () => {
+    const r = await api('/withdrawals' + (more && S.wd.cursor ? '?cursor=' + encodeURIComponent(S.wd.cursor) : ''));
+    if (!r.ok) return;
+    S.wd.items = more ? S.wd.items.concat(r.data.items) : r.data.items; S.wd.cursor = r.data.cursor || null; S.wd.loaded = true;
+    renderWdList();
+  });
+}
+
+// Anti-bot flow: server creates request + payload(comment) -> user pays fee -> server verifies on-chain.
+async function sendTon(intent) {
+  const res = await window.tonConnectUI.sendTransaction({
+    validUntil: Math.floor(Date.now() / 1000) + 600,
+    messages: [{ address: intent.address, amount: String(Math.round(intent.amountTon * 1e9)), payload: intent.payload }]
+  });
+  return res.boc;
 }
 
 async function submitWithdraw() {
-    if (isProcessingWithdraw || !currentUser) return;
-    const amount = parseFloat(document.getElementById('withdrawAmount').value) || 0;
-    if (amount < CONFIG.MIN_WITHDRAW) return showToast(`Minimum ${CONFIG.MIN_WITHDRAW}`, 'error');
-    if (amount > currentUser.balance) return showToast('Insufficient balance', 'error');
-    if (!tonWalletAddress) return showToast('Connect wallet first', 'error');
-    
-    isProcessingWithdraw = true;
-    const btn = document.getElementById('withdrawBtn');
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> PROCESSING...';
-    
+  if (!S.user) return;
+  const amount = Math.floor(parseFloat($('withdrawAmount')?.value) || 0);
+  if (amount < CFG.minWithdraw) return toast(`${t('min')} ${fmt(CFG.minWithdraw)}`, 'error');
+  if (amount > S.user.balance) return toast(t('insufficient'), 'error');
+  if (!S.wallet) return toast(t('connect'), 'error');
+  return once('withdraw', async () => {
+    const btn = $('withdrawBtn'); btn.disabled = true; btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${t('processing')}`;
     try {
-        if (!currentUser.withdrawFeePaid) {
-            const cfg = await apiRequest('/api/config');
-            if (!cfg.ownerWallet) throw new Error('Config error');
-            const result = await window.tonConnectUI.sendTransaction({
-                validUntil: Math.floor(Date.now() / 1000) + 600,
-                messages: [{ address: cfg.ownerWallet, amount: (CONFIG.WITHDRAW_FEE_TON * 1e9).toString() }]
-            });
-            const v = await apiRequest('/api/withdraw/fee-verify', { method: 'POST', body: JSON.stringify({ userId, boc: result.boc }) });
-            if (!v.success) throw new Error('Fee verification failed');
-            await fetchUserData();
-        }
-        const res = await apiRequest('/api/withdraw/request', { method: 'POST', body: JSON.stringify({ userId, amount, walletAddress: tonWalletAddress }) });
-        if (res.success) {
-            showToast('✅ Withdrawal submitted!', 'success');
-            document.getElementById('withdrawAmount').value = '';
-            await fetchUserData();
-        } else showToast(res.error, 'error');
-    } catch (e) { showToast(e.message || 'Failed', 'error'); }
-    finally {
-        isProcessingWithdraw = false;
-        btn.innerHTML = '<i class="fas fa-lock"></i> WITHDRAW';
-    }
+      const it = await api('/withdraw/intent', { method: 'POST', body: { amount } });
+      if (!it.ok) throw new Error(it.error);
+      if (it.data.feeRequired) {
+        let boc; try { boc = await sendTon(it.data); } catch { throw new Error(t('payFail')); }
+        const cf = await api('/withdraw/confirm', { method: 'POST', body: { requestId: it.data.requestId, boc } });
+        if (!cf.ok) throw new Error(cf.error);
+        merge(cf.data.user);
+      } else {
+        const cf = await api('/withdraw/confirm', { method: 'POST', body: { requestId: it.data.requestId } });
+        if (!cf.ok) throw new Error(cf.error); merge(cf.data.user);
+      }
+      $('withdrawAmount').value = ''; S.wd.loaded = false; await loadWithdrawals();
+      toast('✅ ' + t('submitted'), 'success'); haptic('success'); confetti();
+    } catch (e) { toast(e.message || t('netErr'), 'error'); haptic('error'); }
+    finally { btn.disabled = false; btn.innerHTML = `<i class="fas fa-lock"></i> ${t('withdraw')}`; renderAll(); }
+  });
 }
 
 // ============================================================================
-// NAVIGATION & INIT
+// BOOSTS (on-chain payment with unique comment, verified by server)
 // ============================================================================
+window.buyBoost = async type => {
+  if (!S.wallet) return toast(t('connect'), 'warning');
+  const b = CFG.boosts[type]; if (!b) return;
+  if (!(tg?.showConfirm ? await new Promise(r => tg.showConfirm(`${t('confirmBoost')} ${b.price} TON?`, r)) : confirm(`${t('confirmBoost')} ${b.price} TON?`))) return;
+  return once('boost', async () => {
+    try {
+      const it = await api('/boost/intent', { method: 'POST', body: { type } });
+      if (!it.ok) throw new Error(it.error);
+      let boc; try { boc = await sendTon(it.data); } catch { throw new Error(t('payFail')); }
+      const cf = await api('/boost/confirm', { method: 'POST', body: { requestId: it.data.requestId, boc } });
+      if (!cf.ok) throw new Error(cf.error);
+      merge(cf.data.user); toast('🔥 ' + t('boostOk'), 'success'); haptic('success'); confetti();
+    } catch (e) { toast(e.message, 'error'); haptic('error'); }
+    renderAll();
+  });
+};
+
+// ============================================================================
+// TOKEN PRICE (served from server cache; DexScreener hit once/min for ALL users)
+// ============================================================================
+function renderToken() {
+  const p = S.price; if (!p) return;
+  setText('tokenPrice', '$' + (p.usd < 0.01 ? p.usd.toFixed(8) : p.usd.toFixed(4)));
+  setText('tokenMarketCap', '$' + fmt(p.mcap)); setText('tokenFdv', '$' + fmt(p.fdv));
+  setText('tokenLiquidity', '$' + fmt(p.liq)); setText('tokenVolume', '$' + fmt(p.vol));
+  const ch = $('tokenChange'); if (ch) { ch.textContent = (p.change >= 0 ? '+' : '') + Number(p.change || 0).toFixed(2) + '%'; ch.className = 'token-change ' + (p.change >= 0 ? 'positive' : 'negative'); }
+}
+async function refreshPrice() {
+  const r = await api('/price'); if (r.ok) { S.price = r.data.price; renderToken(); renderHeader(); }
+}
+
+// ============================================================================
+// HEADER + RENDER ALL
+// ============================================================================
+const short = (a, n = 4) => a ? `${a.slice(0, n)}...${a.slice(-n)}` : '';
+
+function renderHeader() {
+  if (!S.user) return;
+  const u = tg?.initDataUnsafe?.user || {};
+  const av = $('userAvatar'); if (av && !av.dataset.set) { av.src = u.photo_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.first_name || 'U') + '&background=FF4D00&color=fff'; av.dataset.set = 1; }
+  setText('userName', u.first_name || S.user.firstName || 'User');
+  setText('userHandle', '@' + (u.username || S.user.username || 'user'));
+  setText('headerBalance', `${fmt(S.user.balance, 2)} ${CFG.symbol}`);
+  setText('headerValue', usd(S.user.balance));
+  const a = $('headerAddress'); if (a && S.wallet) { const h = `<i class="fas fa-wallet"></i> ${short(S.wallet)}`; if (a.innerHTML !== h) a.innerHTML = h; }
+}
+
+function renderAll() { renderHeader(); renderMining(); renderAds(); renderTasks(); renderReferral(); renderWallet(); renderCheckin(); renderToken(); persist(); }
+
+function merge(patch) { if (patch) S.user = { ...S.user, ...patch }; }
+function persist() { if (S.user) LS.set('user', { u: S.user, t: S.tasks, p: S.price, w: S.wallet }); }
+
+// ============================================================================
+// EFFECTS (lightweight: transform/opacity only)
+// ============================================================================
+function sparks(el) {
+  if (prefersReduced || !el) return;
+  const r = el.getBoundingClientRect();
+  for (let i = 0; i < 14; i++) {
+    const d = document.createElement('i'), a = Math.random() * Math.PI * 2, dist = 40 + Math.random() * 60;
+    d.style.cssText = `position:fixed;left:${r.left + r.width / 2}px;top:${r.top + r.height / 2}px;width:6px;height:6px;border-radius:50%;background:#FF9500;pointer-events:none;z-index:9999;transition:transform .7s ease-out,opacity .7s`;
+    document.body.appendChild(d);
+    requestAnimationFrame(() => { d.style.transform = `translate(${Math.cos(a) * dist}px,${Math.sin(a) * dist}px) scale(.2)`; d.style.opacity = 0; });
+    setTimeout(() => d.remove(), 750);
+  }
+}
+function confetti() {
+  if (prefersReduced) return;
+  const c = ['#FF4D00', '#FF9500', '#FFD84D', '#F5C451'];
+  for (let i = 0; i < 40; i++) {
+    const d = document.createElement('i'), x = Math.random() * innerWidth;
+    d.style.cssText = `position:fixed;top:-10px;left:${x}px;width:7px;height:10px;background:${c[i % 4]};z-index:9999;pointer-events:none;transition:transform ${1.2 + Math.random()}s ease-in,opacity 1.8s`;
+    document.body.appendChild(d);
+    requestAnimationFrame(() => { d.style.transform = `translate(${(Math.random() - .5) * 160}px,${innerHeight + 20}px) rotate(${Math.random() * 720}deg)`; d.style.opacity = 0; });
+    setTimeout(() => d.remove(), 2400);
+  }
+}
+function startEmbers() {
+  const cv = $('embersCanvas'); if (!cv || prefersReduced || (navigator.hardwareConcurrency || 4) <= 2) return;
+  const ctx = cv.getContext('2d'); const size = () => { cv.width = innerWidth; cv.height = innerHeight; }; size(); addEventListener('resize', size);
+  const P = Array.from({ length: 10 }, () => ({ x: Math.random() * cv.width, y: Math.random() * cv.height, r: 1 + Math.random() * 2, v: .2 + Math.random() * .5 }));
+  let raf; const loop = () => {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    P.forEach(p => { p.y -= p.v; p.x += Math.sin(p.y / 40) * .3; if (p.y < -5) { p.y = cv.height + 5; p.x = Math.random() * cv.width; } ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fillStyle = 'rgba(255,140,0,.55)'; ctx.fill(); });
+    raf = requestAnimationFrame(loop);
+  };
+  loop(); document.addEventListener('visibilitychange', () => { cancelAnimationFrame(raf); if (!document.hidden) loop(); });
+}
+
+// ============================================================================
+// TON CONNECT + BOOT
+// ============================================================================
+function friendly(raw) { try { return TON_CONNECT_UI.toUserFriendlyAddress(raw, false); } catch { return raw; } }
+
+function initTon() {
+  if (typeof TON_CONNECT_UI === 'undefined') return toast(t('netErr'), 'error');
+  window.tonConnectUI = new TON_CONNECT_UI.TonConnectUI({ manifestUrl: location.origin + '/tonconnect-manifest.json', buttonRootId: 'ton-connect-btn', language: lang });
+  window.tonConnectUI.onStatusChange(async w => {
+    if (!w) { S.wallet = null; if (S.booted && !S.user?.wallet) showOnboarding(); return; }
+    S.wallet = friendly(w.account.address);
+    if (S.user && S.user.wallet === S.wallet) { renderHeader(); return; }
+    // First-time registration (or wallet change): ONE write
+    const r = await api('/register', { method: 'POST', body: { wallet: S.wallet, startParam: tg?.initDataUnsafe?.start_param || null } });
+    if (r.ok) { S.user = r.data.user; enterApp(); } else toast(r.error, 'error');
+  });
+}
+
+function showOnboarding() { $('onboardingScreen')?.classList.add('active'); const m = $('mainApp'); if (m) m.style.display = 'none'; }
+function enterApp() {
+  $('onboardingScreen')?.classList.remove('active'); const m = $('mainApp'); if (m) m.style.display = 'block';
+  renderAll();
+  if (!S.tick) S.tick = setInterval(() => { if (document.hidden) return; renderMining(); renderAds(); renderCheckin(); }, 1000);
+}
+
 function switchPage(name) {
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById(`page${name.charAt(0).toUpperCase() + name.slice(1)}`).classList.add('active');
-    document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === name));
-    vibrate('light');
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  $('page' + name[0].toUpperCase() + name.slice(1))?.classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.toggle('active', i.dataset.page === name));
+  haptic('light'); scrollTo({ top: 0 });
+  if (name === 'referral') loadRefs(); if (name === 'wallet') loadWithdrawals();
+}
+
+function bind() {
+  document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => switchPage(i.dataset.page)));
+  const on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
+  on('claimMiningBtn', claimMining); on('watchAdBtn', watchAd); on('claimAdsBtn', claimAds);
+  on('withdrawBtn', submitWithdraw); on('checkinBtn', checkin); on('refreshTokenBtn', refreshPrice);
+  on('maxWithdrawBtn', () => { $('withdrawAmount').value = Math.floor(S.user?.balance || 0); renderWallet(); });
+  on('copyReferralBtn', () => { navigator.clipboard?.writeText(refLink()); toast(t('copied'), 'success'); haptic('light'); });
+  on('shareReferralBtn', () => { const u = `https://t.me/share/url?url=${encodeURIComponent(refLink())}&text=${encodeURIComponent(t('invite'))}`; tg?.openTelegramLink ? tg.openTelegramLink(u) : window.open(u); });
+  on('copyContractBtn', () => { navigator.clipboard?.writeText(CFG.tokenAddress || ''); toast(t('copied'), 'success'); });
+  $('withdrawAmount')?.addEventListener('input', renderWallet);
+  document.addEventListener('click', e => {   // event delegation
+    const tb = e.target.closest('.task-btn[data-act]'); if (tb) return taskAction(tb.closest('[data-task-id]').dataset.taskId, tb.dataset.act);
+    const ms = e.target.closest('[data-ms]'); if (ms) return claimMilestone(ms.dataset.ms);
+    if (e.target.closest('#moreRefs')) return loadRefs(true);
+    if (e.target.closest('#moreWd')) return loadWithdrawals(true);
+  });
+  // Resync when the app returns to foreground (no polling)
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.booted && Date.now() - (S.lastSync || 0) > 60e3) boot(true); });
+}
+
+async function boot(silent = false) {
+  const r = await api('/init');
+  if (!r.ok) { if (!silent && !S.user) showOnboarding(); return; }
+  const d = r.data; S.lastSync = Date.now();
+  Object.assign(CFG, d.config || {});
+  S.serverOffset = (d.serverTime || Date.now()) - Date.now();
+  S.tasks = d.tasks || []; S.price = d.price || S.price;
+  if (d.user && d.user.wallet) { S.user = d.user; S.wallet = S.wallet || d.user.wallet; enterApp(); }
+  else showOnboarding();
+  if (d.banner) toast(d.banner, 'info', 5000);
 }
 
 function init() {
-    userId = tg?.initDataUnsafe?.user?.id?.toString() || new URLSearchParams(window.location.search).get('userId');
-    if (!userId) {
-        console.error('No userId found');
-        return showToast('Open from Telegram', 'error');
-    }
-    console.log('User ID:', userId);
-    
-    initTonConnect();
-    
-    document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => switchPage(i.dataset.page)));
-    document.getElementById('claimMiningBtn').onclick = claimMining;
-    document.getElementById('watchAdBtn').onclick = watchAd;
-    document.getElementById('claimAdsBtn').onclick = claimAdsReward;
-    document.getElementById('withdrawBtn').onclick = submitWithdraw;
-    
-    document.getElementById('copyReferralBtn').onclick = () => {
-        navigator.clipboard.writeText(`https://t.me/GroyperMinebot/Mine?startapp=${userId}`);
-        showToast('Link copied!', 'success');
-    };
-    document.getElementById('shareReferralBtn').onclick = () => {
-        const l = `https://t.me/GroyperMinebot/Mine?startapp=${userId}`;
-        window.open(`https://t.me/share/url?url=${encodeURIComponent(l)}&text=Join Groyper Mine!`);
-    };
-    document.getElementById('refreshTokenBtn').onclick = fetchTokenPrice;
-    document.getElementById('copyContractBtn').onclick = () => {
-        navigator.clipboard.writeText(CONFIG.tokenAddress);
-        showToast('Contract copied!', 'success');
-    };
-    document.getElementById('maxWithdrawBtn').onclick = () => {
-        document.getElementById('withdrawAmount').value = Math.floor(currentUser?.balance || 0);
-    };
-    
-    window.buyBoost = async (type) => {
-        if (!tonConnected) return showToast('Connect wallet first', 'warning');
-        const b = CONFIG.BOOSTS[type];
-        if (!confirm(`Activate ${b.name} Boost for ${b.price} TON?`)) return;
-        try {
-            const cfg = await apiRequest('/api/config');
-            const r = await window.tonConnectUI.sendTransaction({
-                validUntil: Math.floor(Date.now() / 1000) + 600,
-                messages: [{ address: cfg.ownerWallet, amount: (b.price * 1e9).toString() }]
-            });
-            const v = await apiRequest('/api/boost/verify', { method: 'POST', body: JSON.stringify({ userId, boostType: type, boc: r.boc }) });
-            if (v.success) {
-                showToast(`🔥 ${b.name} Boost activated!`, 'success');
-                await fetchUserData();
-            } else showToast(v.error, 'error');
-        } catch (e) { showToast('Payment failed', 'error'); }
-    };
-    
-    // If wallet is already connected, proceed
-    if (window.tonConnectUI?.wallet) {
-        tonConnected = true;
-        tonWalletAddress = window.tonConnectUI.wallet.account.address;
-        checkAndProceed();
-    }
+  if (!tg?.initData) { document.body.insertAdjacentHTML('afterbegin', `<div style="padding:40px;text-align:center;color:#fff">${t('openTg')}</div>`); return; }
+  bind(); startEmbers();
+  // 1) instant paint from local cache
+  const c = LS.get('user');
+  if (c?.u) { S.user = c.u; S.tasks = c.t || []; S.price = c.p || S.price; S.wallet = c.w; if (c.u.wallet) enterApp(); }
+  // 2) wallet SDK + 3) fresh data from the server
+  initTon();
+  boot().then(() => { S.booted = true; });
+  setInterval(() => { if (!document.hidden) refreshPrice(); }, 120e3);
 }
 
 init();
