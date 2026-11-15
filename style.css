@@ -1,7 +1,8 @@
 /* ==========================================================================
-   EMBER VAULT v3.0 — Groyper Mine
+   EMBER VAULT v3.1 — Groyper Mine
    Legendary Edition: cinematic depth, refined hierarchy, mobile-perfect.
-   All sections preserved + premium micro-interactions + full responsiveness.
+   Adds: boost-shortcut button, boost modal, boost earnings rows,
+         boost price USD, boost duration, highlight pulse.
    ========================================================================== */
 
 :root{
@@ -501,7 +502,108 @@ a{color:inherit;text-decoration:none}
   box-shadow:
     0 0 80px -22px rgba(255,77,0,.55),
     var(--shadow-md);
+  position:relative;
 }
+
+/* ============================================================
+   BOOST SHORTCUT — Small rectangle with green radial edges
+   ============================================================ */
+.boost-shortcut{
+  position:absolute;
+  top:14px;
+  right:14px;
+  z-index:10;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:7px 12px;
+  border:1.5px solid rgba(46,212,122,.7);
+  border-radius:12px;
+  background:linear-gradient(135deg,rgba(46,212,122,.15),rgba(46,212,122,.05));
+  color:#fff;
+  cursor:pointer;
+  font-family:var(--f-num);
+  font-size:10.5px;
+  font-weight:800;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  box-shadow:
+    0 0 20px -4px rgba(46,212,122,.6),
+    0 0 0 1px rgba(46,212,122,.25) inset,
+    0 2px 8px rgba(0,0,0,.3);
+  transition:transform .2s ease,box-shadow .3s;
+  -webkit-tap-highlight-color:transparent;
+  animation:boostGreenPulse 2.5s ease-in-out infinite;
+  overflow:hidden;
+}
+.boost-shortcut::before{
+  content:"";
+  position:absolute;
+  inset:-6px;
+  border-radius:16px;
+  background:radial-gradient(ellipse at center,rgba(46,212,122,.35),transparent 70%);
+  z-index:-1;
+  animation:boostGreenGlow 2.5s ease-in-out infinite;
+  pointer-events:none;
+}
+.boost-shortcut::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:linear-gradient(110deg,transparent 35%,rgba(255,255,255,.12) 50%,transparent 65%);
+  transform:translateX(-120%);
+  animation:boostShimmer 3s ease-in-out infinite;
+  pointer-events:none;
+  border-radius:inherit;
+}
+.boost-shortcut:active{
+  transform:scale(.94);
+  box-shadow:
+    0 0 12px -4px rgba(46,212,122,.8),
+    0 0 0 1px rgba(46,212,122,.4) inset;
+}
+.boost-shortcut i{
+  font-size:11px;
+  color:var(--ok);
+  filter:drop-shadow(0 0 6px rgba(46,212,122,.8));
+  flex-shrink:0;
+}
+.boost-shortcut-text{
+  color:var(--ok);
+  font-weight:800;
+  text-shadow:0 0 8px rgba(46,212,122,.5);
+}
+.boost-shortcut-mult{
+  color:var(--gold-bright);
+  font-weight:800;
+  font-size:11.5px;
+  text-shadow:0 0 8px rgba(245,196,81,.7);
+  padding-left:8px;
+  border-left:1px solid rgba(46,212,122,.3);
+  margin-left:2px;
+}
+@keyframes boostGreenPulse{
+  0%,100%{
+    box-shadow:
+      0 0 20px -4px rgba(46,212,122,.6),
+      0 0 0 1px rgba(46,212,122,.25) inset,
+      0 2px 8px rgba(0,0,0,.3);
+  }
+  50%{
+    box-shadow:
+      0 0 28px -2px rgba(46,212,122,.9),
+      0 0 0 1px rgba(46,212,122,.4) inset,
+      0 2px 12px rgba(0,0,0,.4);
+  }
+}
+@keyframes boostGreenGlow{
+  0%,100%{opacity:.6;transform:scale(1);}
+  50%{opacity:1;transform:scale(1.08);}
+}
+@keyframes boostShimmer{
+  60%,100%{transform:translateX(120%);}
+}
+
 .mining-ring-container{
   position:relative;
   width:236px;
@@ -806,11 +908,37 @@ a{color:inherit;text-decoration:none}
 }
 .btn-copy:active{transform:scale(.9);background:rgba(0,152,234,.25)}
 
-/* ---------- Boosts ---------- */
+/* ============================================================
+   BOOSTS — Enhanced with earnings + ROI
+   ============================================================ */
+.boost-explainer{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 14px;
+  margin-bottom:14px;
+  border-radius:var(--r-sm);
+  background:rgba(0,152,234,.08);
+  border:1px solid rgba(0,152,234,.22);
+  font-size:12px;
+  color:var(--tx-2);
+  line-height:1.5;
+}
+.boost-explainer i{
+  color:var(--ton-bright);
+  font-size:14px;
+  flex-shrink:0;
+}
+.boost-explainer strong{
+  color:var(--ton-bright);
+  font-weight:700;
+}
+
 .boost-scroll{
   display:grid;
   grid-template-columns:repeat(3,1fr);
   gap:10px;
+  margin-bottom:16px;
 }
 .boost-card{
   --tier:var(--tier-bronze);
@@ -818,7 +946,7 @@ a{color:inherit;text-decoration:none}
   display:flex;
   flex-direction:column;
   align-items:center;
-  padding:22px 8px 18px;
+  padding:18px 8px 14px;
   border-radius:var(--r-md);
   cursor:pointer;
   text-align:center;
@@ -828,7 +956,7 @@ a{color:inherit;text-decoration:none}
 }
 .boost-card.tier-silver{--tier:var(--tier-silver)}
 .boost-card.tier-gold{--tier:var(--tier-gold)}
-.boost-card:active{transform:scale(.96)}
+.boost-card:active{transform:scale(.97)}
 @supports (background: color-mix(in srgb, red 10%, transparent)) {
   .boost-card{
     background:linear-gradient(180deg,color-mix(in srgb,var(--tier) 16%,transparent),transparent 72%),var(--surface);
@@ -859,29 +987,88 @@ a{color:inherit;text-decoration:none}
   font-weight:700;
   letter-spacing:.14em;
   color:var(--tx-2);
+  margin-bottom:4px;
 }
 .boost-mult{
-  margin:4px 0 11px;
   font-family:var(--f-num);
   font-size:28px;
   font-weight:700;
   color:var(--tier);
-  text-shadow:0 0 20px rgba(245,196,81,.2);
+  line-height:1;
+  text-shadow:0 0 20px rgba(245,196,81,.3);
+}
+.boost-mult-label{
+  font-size:8.5px;
+  font-weight:700;
+  letter-spacing:.15em;
+  color:var(--tx-3);
+  margin:2px 0 10px;
+  text-transform:uppercase;
 }
 .boost-price{
-  padding:4px 13px;
+  padding:4px 12px;
   border-radius:var(--r-pill);
   font-family:var(--f-num);
   font-size:12px;
   font-weight:700;
   color:var(--ton-bright);
   background:var(--ton-dim);
+  margin-bottom:6px;
+}
+.boost-price-usd{
+  font-size:10px;
+  color:var(--tx-3);
+  font-family:var(--f-num);
+  margin-bottom:8px;
+  line-height:1;
+}
+.boost-duration{
+  font-size:9.5px;
+  font-weight:600;
+  color:var(--fire-2);
+  background:rgba(255,149,0,.10);
+  padding:2px 8px;
+  border-radius:var(--r-pill);
+  margin-bottom:10px;
+  letter-spacing:.03em;
+}
+.boost-earnings{
+  width:100%;
+  padding:8px 0;
+  margin-bottom:8px;
+  border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+}
+.boost-earn-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-size:10px;
+  padding:3px 4px;
+  color:var(--tx-3);
+}
+.boost-earn-row strong{
+  font-family:var(--f-num);
+  color:var(--gold-bright);
+  font-weight:700;
+  font-size:10.5px;
+}
+.boost-roi{
+  display:inline-block;
+  padding:4px 10px;
+  border-radius:var(--r-pill);
+  background:rgba(46,212,122,.14);
+  color:var(--ok);
+  font-family:var(--f-num);
+  font-size:10.5px;
+  font-weight:800;
+  letter-spacing:.03em;
 }
 .best-badge{
   position:absolute;
   top:-1px;
   inset-inline-end:10px;
-  padding:3px 10px;
+  padding:3px 9px;
   border-radius:0 0 8px 8px;
   background:var(--gold);
   color:#1a1204;
@@ -889,6 +1076,279 @@ a{color:inherit;text-decoration:none}
   font-weight:800;
   letter-spacing:.08em;
   box-shadow:0 2px 10px rgba(245,196,81,.4);
+}
+
+/* Highlight pulse when user taps Boost shortcut */
+.boost-card.highlight-pulse{
+  animation:cardHighlight 1.5s ease-in-out 3;
+}
+@keyframes cardHighlight{
+  0%,100%{
+    transform:scale(1);
+    box-shadow:inherit;
+  }
+  50%{
+    transform:scale(1.03);
+    box-shadow:0 0 40px -8px rgba(46,212,122,.8);
+  }
+}
+
+/* ---------- Boost Comparison ---------- */
+.boost-comparison{
+  padding:16px 18px;
+  border-radius:var(--r-md);
+  background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));
+  border:1px solid var(--line);
+  margin-bottom:16px;
+}
+.boost-comparison h4{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-family:var(--f-num);
+  font-size:13px;
+  font-weight:700;
+  margin-bottom:12px;
+  color:var(--tx);
+}
+.boost-comparison h4 i{
+  color:var(--fire-2);
+  font-size:14px;
+}
+.comparison-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:8px 0;
+  font-size:12px;
+  color:var(--tx-2);
+  border-bottom:1px dashed var(--line);
+}
+.comparison-row:last-of-type{
+  border-bottom:0;
+}
+.comparison-row strong{
+  font-family:var(--f-num);
+  color:var(--tx);
+  font-weight:600;
+}
+.comparison-row.highlight strong{
+  color:var(--gold-bright);
+  font-size:13px;
+  text-shadow:0 0 14px rgba(245,196,81,.4);
+}
+.comparison-note{
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid var(--line-2);
+  text-align:center;
+  font-size:12px;
+  color:var(--tx-2);
+}
+.comparison-note strong{
+  color:var(--ok);
+  font-family:var(--f-num);
+  font-size:14px;
+  text-shadow:0 0 12px rgba(46,212,122,.4);
+}
+
+/* ============================================================
+   BOOST MODAL
+   ============================================================ */
+.modal-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.8);
+  backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  z-index:9000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  animation:fadeIn .3s ease;
+}
+.modal-overlay.hidden{display:none;}
+.modal-content{
+  position:relative;
+  width:100%;
+  max-width:440px;
+  max-height:90vh;
+  overflow-y:auto;
+  background:var(--surface);
+  border-radius:var(--r-lg);
+  border:1px solid var(--line-2);
+  box-shadow:var(--shadow-xl);
+  padding:24px;
+  animation:slideUp .4s cubic-bezier(.2,.8,.2,1);
+}
+.modal-close{
+  position:absolute;
+  top:12px;
+  right:12px;
+  width:36px;
+  height:36px;
+  border:0;
+  border-radius:50%;
+  background:rgba(255,255,255,.06);
+  color:var(--tx-2);
+  cursor:pointer;
+  z-index:10;
+  display:grid;
+  place-items:center;
+  transition:transform .15s,background .2s;
+}
+.modal-close:active{
+  transform:scale(.9);
+  background:rgba(255,255,255,.12);
+}
+.boost-modal-header{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  margin-bottom:22px;
+  padding-bottom:18px;
+  border-bottom:1px solid var(--line);
+}
+.boost-modal-icon{
+  width:60px;
+  height:60px;
+  border-radius:50%;
+  display:grid;
+  place-items:center;
+  font-size:28px;
+  background:var(--grad-fire-soft);
+  border:1px solid rgba(255,149,0,.3);
+  flex-shrink:0;
+}
+.boost-modal-title{flex:1;}
+.boost-modal-title h2{
+  font-family:var(--f-num);
+  font-size:24px;
+  font-weight:700;
+  margin-bottom:4px;
+}
+.boost-modal-tier{
+  font-size:12.5px;
+  color:var(--fire-2);
+  font-weight:600;
+  letter-spacing:.02em;
+}
+.boost-modal-stats{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:8px;
+  margin-bottom:18px;
+}
+.boost-stat{
+  padding:12px 8px;
+  border-radius:var(--r-sm);
+  background:rgba(255,255,255,.035);
+  border:1px solid var(--line);
+  text-align:center;
+}
+.boost-stat.highlight{
+  background:linear-gradient(180deg,rgba(245,196,81,.12),rgba(245,196,81,.02));
+  border-color:rgba(245,196,81,.35);
+  box-shadow:0 0 24px -10px rgba(245,196,81,.5);
+}
+.boost-stat-label{
+  font-size:9px;
+  font-weight:700;
+  letter-spacing:.1em;
+  color:var(--tx-3);
+  margin-bottom:6px;
+  text-transform:uppercase;
+}
+.boost-stat-value{
+  font-family:var(--f-num);
+  font-size:14px;
+  font-weight:700;
+  color:var(--tx);
+  line-height:1.2;
+  margin-bottom:4px;
+}
+.boost-stat.highlight .boost-stat-value{
+  color:var(--gold-bright);
+  text-shadow:0 0 12px rgba(245,196,81,.4);
+}
+.boost-stat-note{
+  font-size:9.5px;
+  color:var(--tx-3);
+  font-weight:500;
+}
+.boost-modal-comparison{
+  padding:16px;
+  border-radius:var(--r-md);
+  background:rgba(255,255,255,.02);
+  border:1px solid var(--line);
+  margin-bottom:18px;
+}
+.boost-compare-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:8px 0;
+  font-size:12.5px;
+  color:var(--tx-2);
+}
+.boost-compare-row + .boost-compare-row{
+  border-top:1px dashed var(--line);
+}
+.boost-compare-row strong{
+  font-family:var(--f-num);
+  color:var(--tx);
+  font-weight:600;
+  text-align:right;
+  margin-left:10px;
+}
+.boost-compare-row.highlight strong{
+  color:var(--fire-2);
+}
+.boost-compare-row.success strong{
+  color:var(--ok);
+  text-shadow:0 0 10px rgba(46,212,122,.3);
+}
+.boost-modal-price-box{
+  padding:16px;
+  border-radius:var(--r-md);
+  background:linear-gradient(135deg,rgba(245,196,81,.12),rgba(255,149,0,.06));
+  border:1px solid rgba(245,196,81,.32);
+  text-align:center;
+  margin-bottom:18px;
+}
+.boost-modal-price-label{
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.15em;
+  color:var(--tx-2);
+  margin-bottom:6px;
+}
+.boost-modal-price-value{
+  font-family:var(--f-num);
+  font-size:26px;
+  font-weight:700;
+  color:var(--gold-bright);
+  text-shadow:0 0 24px rgba(245,196,81,.5);
+  margin-bottom:4px;
+}
+.boost-modal-price-usd{
+  font-size:12px;
+  color:var(--tx-2);
+  font-family:var(--f-num);
+}
+.boost-modal-actions{
+  display:grid;
+  grid-template-columns:1fr 1.6fr;
+  gap:10px;
+}
+@keyframes fadeIn{
+  from{opacity:0;}
+  to{opacity:1;}
+}
+@keyframes slideUp{
+  from{transform:translateY(30px);opacity:0;}
+  to{transform:translateY(0);opacity:1;}
 }
 
 /* ---------- Earn ---------- */
@@ -1055,6 +1515,33 @@ a{color:inherit;text-decoration:none}
   line-height:1.5;
 }
 .invite-reward strong{color:var(--gold-bright)}
+.invite-condition{
+  position:relative;
+  margin-top:-10px;
+  margin-bottom:22px;
+  padding:13px 16px;
+  border-radius:var(--r-sm);
+  background:rgba(0,152,234,.08);
+  border:1px solid rgba(0,152,234,.24);
+  font-size:12px;
+  line-height:1.75;
+  color:var(--tx-2);
+  text-align:left;
+  box-shadow:0 0 24px -12px rgba(0,152,234,.3);
+}
+.invite-condition strong{color:var(--ton-bright)}
+.invite-condition i{
+  color:var(--ton-bright);
+  margin-right:6px;
+  font-size:13px;
+}
+.invite-condition a{
+  color:var(--fire-2);
+  font-weight:600;
+  text-decoration:underline;
+  text-underline-offset:2px;
+}
+.invite-condition a:active{color:var(--fire-3)}
 .invite-buttons{
   position:relative;
   display:grid;
@@ -1591,6 +2078,16 @@ a{color:inherit;text-decoration:none}
   .user-avatar{width:40px;height:40px}
   .wallet-balance{font-size:15.5px}
   .app-header{padding-top:calc(10px + var(--safe-t))}
+  .boost-shortcut{padding:6px 10px;font-size:9.5px;top:10px;right:10px;border-radius:10px}
+  .boost-shortcut i{font-size:10px}
+  .boost-shortcut-mult{font-size:10.5px;padding-left:6px;margin-left:1px}
+  .boost-scroll{gap:8px}
+  .boost-card{padding:14px 6px 12px}
+  .boost-icon{width:42px;height:42px;font-size:20px}
+  .boost-mult{font-size:24px}
+  .boost-earn-row{font-size:9px}
+  .boost-earn-row strong{font-size:9.5px}
+  .boost-modal-stats{grid-template-columns:1fr}
 }
 
 /* ---------- Responsive — Medium (361-390px) ---------- */
@@ -1672,7 +2169,7 @@ input:focus-visible,
 
 /* ---------- Print (hide animations) ---------- */
 @media print{
-  .bottom-nav,.toast,#embersCanvas{display:none!important}
+  .bottom-nav,.toast,#embersCanvas,.boost-shortcut,.boost-modal{display:none!important}
   .card{box-shadow:none;border:1px solid #ccc}
   body{background:#fff;color:#000}
 }
