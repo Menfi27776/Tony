@@ -16,6 +16,23 @@
     <!-- Ad Networks -->
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
     <script src="https://richinfo.co/richpartners/telegram/js/tg-ob.js"></script>
+    <script>
+        // RichAds controller — must be initialized AFTER tg-ob.js loads
+        try {
+            if (typeof TelegramAdsController !== 'undefined') {
+                window.TelegramAdsController = new TelegramAdsController();
+                window.TelegramAdsController.initialize({
+                    pubId: "1009657",
+                    appId: "7207",
+                });
+                console.log('✅ RichAds initialized');
+            } else {
+                console.warn('⚠️ TelegramAdsController not available');
+            }
+        } catch (e) {
+            console.warn('⚠️ RichAds init failed:', e);
+        }
+    </script>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -172,7 +189,7 @@
 
                 <div class="token-footer">
                     <span class="contract-address" id="contractAddress">
-                        <i class="fas fa-file-contract" aria-hidden="true"></i> EQBv…jAG_CH
+                        <i class="fas fa-file-contract" aria-hidden="true"></i> EQAtw…X1P
                     </span>
                     <button id="copyContractBtn" class="btn-copy" aria-label="Copy contract address">
                         <i class="fas fa-copy" aria-hidden="true"></i>
@@ -285,7 +302,7 @@
                 </div>
             </div>
 
-            <!-- Referral Earnings Card (ADDED) -->
+            <!-- Referral Earnings Card -->
             <div class="card referral-earnings-card" id="referralEarningsCard">
                 <div class="referral-earnings-inner">
                     <div class="earnings-icon">
@@ -301,7 +318,7 @@
                 </div>
             </div>
 
-            <!-- Referral Link Card (ADDED) -->
+            <!-- Referral Link Card -->
             <div class="card referral-link-card" id="referralLinkCard">
                 <h3 class="card-title">
                     <i class="fas fa-link" aria-hidden="true"></i>
