@@ -2234,6 +2234,11 @@ input:focus-visible,
   outline-offset:2px;
 }
 
+/* ---------- Wallet connect button alignment ---------- */
+.btn-wallet-connect{
+  margin-left:auto;
+}
+
 /* ---------- Print (hide animations) ---------- */
 @media print{
   .bottom-nav,.toast,#embersCanvas,.boost-shortcut,.boost-modal{display:none!important}
