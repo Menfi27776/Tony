@@ -621,14 +621,33 @@ function renderMining() {
     const power = $('hashPower');
     if (power) power.textContent = `${d.multiplier}x`;
 
+    // ---- Mining Belt Button (frog + belt) ----
     const btn = $('claimMiningBtn');
     if (btn) {
         btn.disabled = !d.canClaim || isClaimingMining;
+        btn.classList.toggle('mining-active', !d.canClaim && !isClaimingMining);
+        btn.classList.toggle('mining-ready', d.canClaim && !isClaimingMining);
+
         const label = $('claimLabel');
-        if (label) {
-            label.textContent = d.canClaim
-                ? `CLAIM ${Math.floor(d.reward).toLocaleString()} ${CONFIG.tokenSymbol}`
-                : 'CLAIM MINING';
+        const countdown = $('miningCountdown');
+        const beltFill = $('beltFill');
+        const frog = $('frogSticker');
+
+        const progressPct = (d.progress * 100).toFixed(2);
+
+        if (isClaimingMining) {
+            if (label) label.textContent = 'CLAIMING...';
+            if (countdown) countdown.textContent = '';
+        } else if (d.canClaim) {
+            if (label) label.textContent = `🔥 CLAIM ${Math.floor(d.reward).toLocaleString()} ${CONFIG.tokenSymbol}`;
+            if (countdown) countdown.textContent = '';
+            if (beltFill) beltFill.style.width = '100%';
+            if (frog) frog.style.left = 'calc(100% - 18px)';
+        } else {
+            if (label) label.textContent = 'MINING IN PROGRESS';
+            if (countdown) countdown.textContent = formatTimeLeft(d.remainingMs);
+            if (beltFill) beltFill.style.width = `${progressPct}%`;
+            if (frog) frog.style.left = `calc(${progressPct}% - 0px)`;
         }
     }
 
