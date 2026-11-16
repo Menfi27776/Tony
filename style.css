@@ -2239,6 +2239,114 @@ input:focus-visible,
   margin-left:auto;
 }
 
+/* ============================================================
+   MINING PROGRESS BELT — شريط تقدم شفاف خلف النص (CSS only)
+   ============================================================ */
+.btn-claim.mining-progress{
+    position:relative;
+    overflow:hidden;
+    background:var(--surface-2) !important;
+    color:var(--tx) !important;
+    border:1px solid rgba(0,255,102,.22);
+    box-shadow:
+        0 0 24px -12px rgba(0,255,102,.35),
+        0 0 0 1px rgba(0,255,102,.1) inset;
+    cursor:default;
+    min-height:64px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:3px;
+    padding:10px 20px;
+}
+
+.btn-claim.mining-progress:disabled{
+    opacity:1 !important;
+    filter:none !important;
+    cursor:default;
+}
+
+/* الحزام — شفاف خلف النص */
+.btn-claim.mining-progress::before{
+    content:"";
+    position:absolute;
+    top:0;
+    bottom:0;
+    left:0;
+    width:var(--progress, 0%);
+    background:linear-gradient(90deg,
+        rgba(255,77,0,.35) 0%,
+        rgba(255,149,0,.35) 40%,
+        rgba(57,255,136,.35) 75%,
+        rgba(0,255,102,.45) 100%);
+    transition:width 1s linear;
+    z-index:0;
+    pointer-events:none;
+}
+
+/* لمعة تمر */
+.btn-claim.mining-progress::after{
+    content:"";
+    position:absolute;
+    top:0;
+    bottom:0;
+    left:-40%;
+    width:40%;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.18),transparent);
+    animation:miningBeltShimmer 2.6s ease-in-out infinite;
+    z-index:1;
+    pointer-events:none;
+}
+
+@keyframes miningBeltShimmer{
+    0%{left:-40%;}
+    100%{left:100%;}
+}
+
+/* النص فوق الحزام */
+.btn-claim.mining-progress > *{
+    position:relative;
+    z-index:2;
+}
+
+/* عند READY — زر أخضر عادي */
+.btn-claim.mining-progress.mining-ready{
+    background:var(--grad-fire) !important;
+    color:#052A14 !important;
+    border-color:rgba(57,255,136,.55);
+    box-shadow:
+        0 1px 0 rgba(255,255,255,.55) inset,
+        0 14px 30px -10px rgba(0,255,102,.7),
+        0 0 0 1px rgba(57,255,136,.55);
+    animation:readyBeltPulse 1.6s ease-in-out infinite;
+    cursor:pointer;
+}
+
+@keyframes readyBeltPulse{
+    0%,100%{
+        box-shadow:
+            0 1px 0 rgba(255,255,255,.55) inset,
+            0 14px 30px -10px rgba(0,255,102,.7),
+            0 0 0 1px rgba(57,255,136,.55);
+    }
+    50%{
+        box-shadow:
+            0 1px 0 rgba(255,255,255,.55) inset,
+            0 20px 40px -8px rgba(0,255,102,.9),
+            0 0 0 2px rgba(57,255,136,.8);
+    }
+}
+
+.btn-claim.mining-progress.mining-ready::before{
+    width:100% !important;
+    opacity:0;
+}
+
+.btn-claim.mining-progress.mining-ready::after{
+    display:none;
+}
+
 /* ---------- Print (hide animations) ---------- */
 @media print{
   .bottom-nav,.toast,#embersCanvas,.boost-shortcut,.boost-modal{display:none!important}
