@@ -1,9 +1,9 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.7
+// GROYPER MINE — EMBER VAULT v2.8
 // Full rewrite — legendary edition with all fixes and new integrations.
 // Fixes:    adexiumWidget (not adexiumAds), adPlaybackCompleted as success,
 //           alternating providers (Monetag → Adexium → Monetag → ...),
-//           no auto-show, no freeze
+//           no freeze, no reward without ad
 // Adds:     everything from v2.6 + these corrections
 // ============================================================================
 'use strict';
@@ -581,9 +581,9 @@ async function claimMining() {
             return;
         }
 
-        // 2. UI feedback
+        // 2. UI feedback (do NOT show provider name)
         if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Watching...';
-        showToast(`🎬 Watching ad...`, 'info', 2000);
+        showToast('🎬 Watching ad...', 'info', 2000);
 
         // 3. Wait minimum gap
         await sleep((CONFIG.ADS_MIN_GAP_SEC || 15) * 1000);
@@ -741,29 +741,47 @@ function showAdexiumAd() {
     });
 }
 
-// Monetag
+// Monetag — with heuristic wait
 function showMonetagAd() {
     if (typeof window.show_12265394 !== 'function') {
         console.warn('❌ Monetag not available');
-        return false;
+        return Promise.resolve(false);
     }
-    try {
-        window.show_12265394({
-            type: 'inApp',
-            inAppSettings: {
-                frequency: 2,
-                capping: 0.1,
-                interval: 30,
-                timeout: 5,
-                everyPage: false
-            }
-        });
-        console.log('📺 Monetag called');
-        return true;
-    } catch (e) {
-        console.warn('Monetag failed:', e);
-        return false;
-    }
+
+    return new Promise((resolve) => {
+        let resolved = false;
+        const finish = (success) => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timeout);
+            resolve(success);
+        };
+
+        // Timeout: 10s
+        const timeout = setTimeout(() => {
+            console.warn('⏰ Monetag: timeout');
+            finish(false);
+        }, 10000);
+
+        try {
+            window.show_12265394({
+                type: 'inApp',
+                inAppSettings: {
+                    frequency: 2,
+                    capping: 0.1,
+                    interval: 30,
+                    timeout: 5,
+                    everyPage: false
+                }
+            });
+            console.log('📺 Monetag called — waiting 3s');
+            // Wait 3 seconds (typical ad show time)
+            setTimeout(() => finish(true), 3000);
+        } catch (e) {
+            console.warn('Monetag failed:', e);
+            finish(false);
+        }
+    });
 }
 
 // Alternating providers: Monetag → Adexium → Monetag → Adexium → ...
@@ -783,11 +801,9 @@ async function tryTriggerAdSDK() {
         return ok ? 'adexium' : null;
     }
     if (!hasAdexium) {
-        if (showMonetagAd()) {
-            lastAdProvider = 'monetag';
-            return 'monetag';
-        }
-        return null;
+        const ok = await showMonetagAd();
+        if (ok) lastAdProvider = 'monetag';
+        return ok ? 'monetag' : null;
     }
 
     // ✅ Alternating: switch from last
@@ -795,7 +811,7 @@ async function tryTriggerAdSDK() {
     console.log(`🎯 Trying: ${nextProvider} (last was ${lastAdProvider})`);
 
     if (nextProvider === 'monetag') {
-        if (showMonetagAd()) {
+        if (await showMonetagAd()) {
             lastAdProvider = 'monetag';
             return 'monetag';
         }
@@ -812,7 +828,7 @@ async function tryTriggerAdSDK() {
         }
         // Fallback
         console.log('↩️ Adexium failed, trying Monetag...');
-        if (showMonetagAd()) {
+        if (await showMonetagAd()) {
             lastAdProvider = 'monetag';
             return 'monetag';
         }
