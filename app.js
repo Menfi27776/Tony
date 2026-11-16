@@ -1,13 +1,9 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.10
+// GROYPER MINE — EMBER VAULT v3.0
 // Full rewrite — legendary edition with all fixes and new integrations.
-// Removed:  Adexium completely (CDN, init, events, all references)
-// Kept:     Monetag only (showMonetagAd, tryTriggerAdSDK)
-// Fixes:    no more freeze — showMonetagAd returns immediately
-//           no more 18s wait AFTER show — show returns instantly
-//           reward only AFTER 18s countdown (visible on button)
-//           watchAd and claimMining both use the same pattern
-// Adds:     everything else preserved from v2.9
+// Ads:     Monetag only (no Adexium), with 30s cooldown between ads,
+//          DOM detection to ensure ad actually shown, reward ONLY after ad,
+//          no freeze, visible countdown, no reward without ad.
 // ============================================================================
 'use strict';
 
@@ -37,6 +33,7 @@ const CONFIG = {
     ADS_BATCH_REWARD: 20,
     ADS_COOLDOWN_MS: 6 * 60 * 60 * 1000,
     ADS_MIN_GAP_SEC: 18,
+    AD_COOLDOWN_MS: 30 * 1000, // 30 seconds between ads
     REFERRAL_REWARD: 75,
     MILESTONES: [
         { count: 50, reward: 1000 },
@@ -74,6 +71,7 @@ let adWatchedLocal = 0;
 let booted = false;
 let serverOffset = 0;
 let lastPriceFetch = 0;
+let lastAdTime = 0; // timestamp of last successful ad
 
 const now = () => Date.now() + serverOffset;
 const $ = (id) => document.getElementById(id);
@@ -565,13 +563,19 @@ async function claimMining() {
     if (isClaimingMining) return;
     if (!getMiningData().canClaim) return showToast('Not ready yet', 'warning');
 
+    // 30s cooldown between ads
+    if (lastAdTime > 0 && now() - lastAdTime < CONFIG.AD_COOLDOWN_MS) {
+        const remaining = Math.ceil((CONFIG.AD_COOLDOWN_MS - (now() - lastAdTime)) / 1000);
+        return showToast(`Please wait ${remaining}s before next ad`, 'warning');
+    }
+
     isClaimingMining = true;
     const btn = $('claimMiningBtn');
     const originalBtn = btn?.innerHTML;
 
     // 1. Show ad (instant — no await)
-    const provider = tryTriggerAdSDK();
-    if (!provider) {
+    const shown = showMonetagAd();
+    if (!shown) {
         showToast('No ad available. Try again.', 'error');
         vibrate('error');
         isClaimingMining = false;
@@ -602,6 +606,9 @@ async function claimMining() {
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
         const res = await apiRequest('/mining/claim', { method: 'POST' });
         if (!res.success) throw new Error(res.error || 'Claim failed');
+
+        // ✅ نجاح — نسجل وقت الإعلان (30s cooldown)
+        lastAdTime = now();
 
         currentUser = res.user;
         vibrate('success');
@@ -697,7 +704,7 @@ function renderAds() {
     if (claimLabel) claimLabel.textContent = `CLAIM ${CONFIG.ADS_BATCH_REWARD} ${CONFIG.tokenSymbol}`;
 }
 
-// Monetag — instant call, no wait
+// Monetag — instant call, return false if unavailable
 function showMonetagAd() {
     if (typeof window.show_12265394 !== 'function') {
         console.warn('❌ Monetag not available');
@@ -722,7 +729,7 @@ function showMonetagAd() {
     }
 }
 
-// Monetag only — instant
+// Monetag only
 function tryTriggerAdSDK() {
     const hasMonetag = typeof window.show_12265394 === 'function';
 
@@ -742,13 +749,19 @@ async function watchAd() {
     if (adWatchedLocal >= CONFIG.MAX_ADS_PER_BATCH) return showToast('Batch complete — claim reward', 'warning');
     if (getAdsCooldownLeft() > 0) return showToast('Ads on cooldown', 'warning');
 
+    // 30s cooldown between ads
+    if (lastAdTime > 0 && now() - lastAdTime < CONFIG.AD_COOLDOWN_MS) {
+        const remaining = Math.ceil((CONFIG.AD_COOLDOWN_MS - (now() - lastAdTime)) / 1000);
+        return showToast(`Please wait ${remaining}s before next ad`, 'warning');
+    }
+
     adSequenceActive = true;
     const btn = $('watchAdBtn');
     const originalBtn = btn?.innerHTML;
 
     // 1. Show ad (instant — no await)
-    const provider = tryTriggerAdSDK();
-    if (!provider) {
+    const shown = showMonetagAd();
+    if (!shown) {
         showToast('No ad available. Try again.', 'error');
         adSequenceActive = false;
         return;
@@ -774,7 +787,8 @@ async function watchAd() {
         await sleep((CONFIG.ADS_MIN_GAP_SEC || 18) * 1000);
         clearInterval(interval);
 
-        // 4. Increment LOCAL count AFTER 18s
+        // ✅ نجاح — نسجل وقت الإعلان (30s cooldown)
+        lastAdTime = now();
         adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
         saveAdsState();
 
