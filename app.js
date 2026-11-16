@@ -33,8 +33,8 @@ const CONFIG = {
     MAX_ADS_PER_BATCH: 10,
     ADS_BATCH_REWARD: 20,
     ADS_COOLDOWN_MS: 6 * 60 * 60 * 1000,
-    ADS_MIN_GAP_SEC: 18,        // Monetag countdown
-    VISIT_AD_SEC: 15,           // Visit link countdown
+    ADS_MIN_GAP_SEC: 20,        // Monetag countdown
+    VISIT_AD_SEC: 20,           // Visit link countdown
     AD_COOLDOWN_MS: 30000,      // 30s between completed ads
     VISIT_AD_URL: 'https://uplcm.com/4/12274483', // Monetag Direct Link
     REFERRAL_REWARD: 75,
