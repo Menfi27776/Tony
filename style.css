@@ -2431,6 +2431,14 @@ input:focus-visible,
     display:none;
 }
 
+/* ---------- Utility: global hidden ---------- */
+.hidden{display:none!important;}
+
+/* Force-hide boost status pill when no tier is set */
+.boost-status-pill:not([data-tier]){
+    display:none!important;
+}
+
 /* ---------- Print (hide animations) ---------- */
 @media print{
   .bottom-nav,.toast,#embersCanvas,.boost-shortcut,.boost-modal{display:none!important}
