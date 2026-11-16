@@ -624,11 +624,15 @@ function renderMining() {
     const btn = $('claimMiningBtn');
     if (btn) {
         btn.disabled = !d.canClaim || isClaimingMining;
+        btn.classList.toggle('mining-progress', !d.canClaim && !isClaimingMining);
+        btn.classList.toggle('mining-ready', d.canClaim && !isClaimingMining);
+        btn.style.setProperty('--progress', `${(d.progress * 100).toFixed(1)}%`);
+
         const label = $('claimLabel');
         if (label) {
             label.textContent = d.canClaim
                 ? `CLAIM ${Math.floor(d.reward).toLocaleString()} ${CONFIG.tokenSymbol}`
-                : 'CLAIM MINING';
+                : 'MINING IN PROGRESS';
         }
     }
 
