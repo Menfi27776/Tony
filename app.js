@@ -426,6 +426,7 @@ document.addEventListener('visibilitychange', () => {
         renderToken();
         updateHeaderWallet();
         updateWalletConnectBtn();
+        renderBoostStatusPill();
     }
 });
 
@@ -587,6 +588,43 @@ function getActiveMultiplier() {
     const exp = currentUser.boostExpiresAt || 0;
     if (exp && exp < now()) return 1;
     return currentUser.boostMultiplier || 1;
+}
+
+// NEW — returns 'bronze'|'silver'|'gold'|null (active boost tier)
+function getActiveBoostType() {
+    if (!currentUser) return null;
+    const exp = currentUser.boostExpiresAt || 0;
+    if (!exp || exp < now()) return null;
+    const type = currentUser.boostType || null;
+    if (!type) return null;
+    if (!CONFIG.BOOSTS[type]) return null;
+    if ((currentUser.boostMultiplier || 1) <= 1) return null;
+    return type;
+}
+
+// NEW — update boost status pill (called from renderAll only)
+function renderBoostStatusPill() {
+    const pill = $('boostStatusPill');
+    if (!pill) return;
+
+    const active = getActiveBoostType();
+    if (!active) {
+        pill.classList.add('hidden');
+        return;
+    }
+
+    const cfgBoost = CONFIG.BOOSTS[active];
+    const iconMap = { bronze: '🥉', silver: '🥈', gold: '🥇' };
+    const iconEl = $('boostStatusIcon');
+    const nameEl = $('boostStatusName');
+    const multEl = $('boostStatusMult');
+
+    if (iconEl) iconEl.textContent = iconMap[active] || '⚡';
+    if (nameEl) nameEl.textContent = cfgBoost?.name || active.toUpperCase();
+    if (multEl) multEl.textContent = `${currentUser.boostMultiplier || 1}x`;
+
+    pill.dataset.tier = active;
+    pill.classList.remove('hidden');
 }
 
 function renderMining() {
@@ -1577,6 +1615,7 @@ function renderAll() {
     renderWallet();
     renderToken();
     renderBoosts();
+    renderBoostStatusPill();
 }
 
 // ----------------------------------------------------------------------------
