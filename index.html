@@ -31,22 +31,22 @@
             }
 
             try {
-                // ✅ adexiumWidget (not adexiumAds)
+                // ✅ adexiumWidget (exactly as in official docs)
                 window.adexiumWidget = new window.AdexiumWidget({
                     wid: 'd9e2de77-513f-469f-9a05-eb03d0069f8e',
                     adFormat: 'interstitial',
-                    firstAdImpressionIntervalInSeconds: 999999,  // ← no auto-show
-                    adImpressionIntervalInSeconds: 999999        // ← no auto-show
+                    firstAdImpressionIntervalInSeconds: 999999,  // ← prevent auto-show
+                    adImpressionIntervalInSeconds: 999999        // ← prevent auto-show
                 });
 
-                // ✅ autoMode to activate SDK (without auto-show due to intervals)
+                // ✅ autoMode() — required to activate SDK (no auto-show due to intervals)
                 window.adexiumWidget.autoMode();
 
                 // Global state for tracking ad lifecycle
                 window.__adexiumAdState = 'idle';
                 window.__adexiumAd = null;
 
-                // ✅ adReceived — request display only (don't set displayed)
+                // ✅ adReceived — request display only (don't set displayed here)
                 window.adexiumWidget.on('adReceived', (ad) => {
                     console.log('📺 Adexium: ad received');
                     window.__adexiumAdState = 'received';
@@ -92,7 +92,7 @@
                     window.__adexiumAdState = 'redirected';
                 });
 
-                console.log('✅ Adexium initialized (no auto-show, playback tracking)');
+                console.log('✅ Adexium initialized (manual mode, no auto-show)');
             } catch (e) {
                 console.error('❌ Adexium init failed:', e);
             }
