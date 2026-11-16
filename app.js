@@ -1,8 +1,10 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v3.1
+// GROYPER MINE — EMBER VAULT v3.2
 // Full rewrite — legendary edition with all fixes and new integrations.
-// Ads:     Monetag + Visit Link (alternating), 30s cooldown between ads,
-//          visible 18s countdown, reward only after full wait, no freeze.
+// Ads:     Monetag + Visit Link alternating (10 ads per batch),
+//          Visit Link is double-press: 1st = "Verification failed",
+//          2nd = reward. 30s cooldown between completed ads,
+//          visible countdown, reward only after full wait, no freeze.
 // ============================================================================
 'use strict';
 
@@ -31,8 +33,9 @@ const CONFIG = {
     MAX_ADS_PER_BATCH: 10,
     ADS_BATCH_REWARD: 20,
     ADS_COOLDOWN_MS: 6 * 60 * 60 * 1000,
-    ADS_MIN_GAP_SEC: 18,
-    AD_COOLDOWN_MS: 30000, // 30s between ads
+    ADS_MIN_GAP_SEC: 18,        // Monetag countdown
+    VISIT_AD_SEC: 15,           // Visit link countdown
+    AD_COOLDOWN_MS: 30000,      // 30s between completed ads
     VISIT_AD_URL: 'https://uplcm.com/4/12274483', // Monetag Direct Link
     REFERRAL_REWARD: 75,
     MILESTONES: [
@@ -68,7 +71,7 @@ let miningTimer = null;
 let livePriceData = { price: 0, change24h: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
 let adsState = { watched: 0, accumulated: 0, token: null };
 let adWatchedLocal = 0;
-let adMode = 'monetag'; // 'monetag' | 'visit' — alternates each time
+let visitAttempt = 1; // 1 = first press (fails), 2 = second press (rewards)
 let lastAdTime = 0;
 let booted = false;
 let serverOffset = 0;
@@ -631,34 +634,49 @@ async function claimMining() {
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — Monetag + Visit Link (alternating, localStorage tracking)
+// 10. ADS — Monetag + Visit Link alternating (10 per batch)
+//     Visit Link is a double-press: 1st = fail, 2nd = reward
 // ----------------------------------------------------------------------------
 function loadAdsState() {
     try {
         const saved = localStorage.getItem('adWatchedLocal');
         adWatchedLocal = parseInt(saved || '0', 10) || 0;
         adWatchedLocal = Math.min(adWatchedLocal, CONFIG.MAX_ADS_PER_BATCH);
-        console.log(`📂 Loaded ad progress: ${adWatchedLocal}/${CONFIG.MAX_ADS_PER_BATCH}`);
+
+        const savedAttempt = localStorage.getItem('visitAttempt');
+        visitAttempt = parseInt(savedAttempt || '1', 10) || 1;
+        if (visitAttempt !== 2) visitAttempt = 1;
+
+        console.log(`📂 Loaded ad progress: ${adWatchedLocal}/${CONFIG.MAX_ADS_PER_BATCH} · visitAttempt=${visitAttempt}`);
     } catch {
         adWatchedLocal = 0;
+        visitAttempt = 1;
     }
 }
 
 function saveAdsState() {
     try {
         localStorage.setItem('adWatchedLocal', String(adWatchedLocal));
-        console.log(`💾 Saved ad progress: ${adWatchedLocal}/${CONFIG.MAX_ADS_PER_BATCH}`);
+        localStorage.setItem('visitAttempt', String(visitAttempt));
+        console.log(`💾 Saved ad progress: ${adWatchedLocal}/${CONFIG.MAX_ADS_PER_BATCH} · visitAttempt=${visitAttempt}`);
     } catch {}
 }
 
 function resetAdsState() {
     adWatchedLocal = 0;
+    visitAttempt = 1;
     localStorage.removeItem('adWatchedLocal');
+    localStorage.removeItem('visitAttempt');
     console.log('🔄 Ad progress reset');
 }
 
 function getAdsCooldownLeft() {
     return Math.max(0, (currentUser?.adsCooldownUntil || 0) - now());
+}
+
+// Which ad type is next? Alternates: even → Monetag, odd → Visit
+function getNextAdType() {
+    return (adWatchedLocal % 2 === 0) ? 'monetag' : 'visit';
 }
 
 function renderAds() {
@@ -698,7 +716,7 @@ function renderAds() {
         if (t) t.textContent = formatTimeLeft(cd);
     }
 
-    // Labels
+    // Labels — always generic "WATCH AD", never expose provider
     const watchLabel = $('watchAdLabel');
     if (watchLabel) watchLabel.textContent = `WATCH AD (+${perAd} ${CONFIG.tokenSymbol})`;
     const claimLabel = $('claimAdsLabel');
@@ -751,28 +769,20 @@ function openVisitAd() {
     }
 }
 
-// Alternating: monetag → visit → monetag → visit → ...
+// Provider entrypoint — used by watchAd() and claimMining()
+// Returns 'monetag' | 'visit' | null
 function tryTriggerAdSDK() {
-    if (adMode === 'monetag') {
-        if (typeof window.show_12265394 !== 'function') {
-            console.warn('❌ Monetag not available → switching to visit');
-            adMode = 'visit';
-            return tryTriggerAdSDK();
-        }
-        if (showMonetagAd()) {
-            adMode = 'visit'; // next is visit
-            return 'monetag';
-        }
-        adMode = 'visit';
-        return tryTriggerAdSDK();
-    } else {
-        if (openVisitAd()) {
-            adMode = 'monetag'; // next is monetag
-            return 'visit';
-        }
-        adMode = 'monetag';
-        return tryTriggerAdSDK();
+    const type = getNextAdType();
+    if (type === 'visit') {
+        if (openVisitAd()) return 'visit';
+        // Fallback to Monetag if visit can't open
+        if (showMonetagAd()) return 'monetag';
+        return null;
     }
+    if (showMonetagAd()) return 'monetag';
+    // Fallback to Visit if Monetag unavailable
+    if (openVisitAd()) return 'visit';
+    return null;
 }
 
 async function watchAd() {
@@ -780,31 +790,46 @@ async function watchAd() {
     if (adWatchedLocal >= CONFIG.MAX_ADS_PER_BATCH) return showToast('Batch complete — claim reward', 'warning');
     if (getAdsCooldownLeft() > 0) return showToast('Ads on cooldown', 'warning');
 
-    // 30s cooldown between ads
+    // 30s cooldown between COMPLETED ads only
     if (lastAdTime > 0 && now() - lastAdTime < CONFIG.AD_COOLDOWN_MS) {
         const remaining = Math.ceil((CONFIG.AD_COOLDOWN_MS - (now() - lastAdTime)) / 1000);
         return showToast(`Please wait ${remaining}s before next ad`, 'warning');
     }
 
+    const adType = getNextAdType();
+    const isVisit = adType === 'visit';
+
     adSequenceActive = true;
     const btn = $('watchAdBtn');
     const originalBtn = btn?.innerHTML;
 
-    // 1. Trigger ad (Monetag or Visit link)
-    const provider = tryTriggerAdSDK();
+    // 1. Trigger the ad provider
+    let provider = null;
+    if (isVisit) {
+        provider = openVisitAd() ? 'visit' : null;
+        if (!provider && showMonetagAd()) provider = 'monetag';
+    } else {
+        provider = showMonetagAd() ? 'monetag' : null;
+        if (!provider && openVisitAd()) provider = 'visit';
+    }
+
     if (!provider) {
         showToast('No ad available. Try again.', 'error');
         adSequenceActive = false;
         return;
     }
 
-    // 2. 18s countdown on button (visible — no freeze)
-    let remaining = (CONFIG.ADS_MIN_GAP_SEC || 18);
+    // 2. Countdown (visible — no freeze)
+    const waitSeconds = (provider === 'visit')
+        ? (CONFIG.VISIT_AD_SEC || 15)
+        : (CONFIG.ADS_MIN_GAP_SEC || 18);
+
+    let remaining = waitSeconds;
     if (btn) {
         btn.disabled = true;
         btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
     }
-    showToast(`🎬 ${provider === 'visit' ? 'Opening link...' : 'Watching ad...'} (18s)`, 'info', 2000);
+    showToast(`🎬 ${provider === 'visit' ? 'Opening link...' : 'Watching ad...'} (${waitSeconds}s)`, 'info', 2000);
 
     const interval = setInterval(() => {
         remaining--;
@@ -814,18 +839,38 @@ async function watchAd() {
     }, 1000);
 
     try {
-        // 3. Wait exactly 18s
-        await sleep((CONFIG.ADS_MIN_GAP_SEC || 18) * 1000);
+        // 3. Wait full duration
+        await sleep(waitSeconds * 1000);
         clearInterval(interval);
 
-        // ✅ Success — record ad time (30s cooldown)
-        lastAdTime = now();
-        adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
-        saveAdsState();
-
-        vibrate('success');
-        renderAds();
-        showToast(`+${CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH} ${CONFIG.tokenSymbol}`, 'success');
+        // 4. Resolve outcome
+        if (provider === 'visit') {
+            if (visitAttempt === 1) {
+                // ❌ First press — forced verification failure, no cooldown
+                visitAttempt = 2;
+                saveAdsState();
+                vibrate('error');
+                showToast('❌ Verification failed. Try again', 'error', 3200);
+            } else {
+                // ✅ Second press — reward + cooldown
+                visitAttempt = 1;
+                lastAdTime = now();
+                adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
+                saveAdsState();
+                vibrate('success');
+                renderAds();
+                showToast(`+${CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH} ${CONFIG.tokenSymbol}`, 'success');
+            }
+        } else {
+            // Monetag — normal success
+            visitAttempt = 1;
+            lastAdTime = now();
+            adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
+            saveAdsState();
+            vibrate('success');
+            renderAds();
+            showToast(`+${CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH} ${CONFIG.tokenSymbol}`, 'success');
+        }
     } catch (e) {
         clearInterval(interval);
         vibrate('error');
