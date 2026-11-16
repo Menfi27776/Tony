@@ -1,10 +1,10 @@
 /* ==========================================================================
-   EMBER VAULT v3.2 — Groyper Mine
+   EMBER VAULT v3.3 — Groyper Mine
    Legendary Edition: cinematic depth, refined hierarchy, mobile-perfect.
    Green Frog Theme: bright glowing green, inspired by Pepe.
-   Adds: boost-shortcut button, boost modal, boost earnings rows,
-         boost price USD, boost duration, highlight pulse,
-         mining-card bubble particles (rising dots).
+   v3.3: Compact cards (5-10% smaller), leaner Earn/Referral/Wallet pages,
+         compact ⚡×20 boost shortcut with periodic shake,
+         rising bubble particles inside mining card.
    ========================================================================== */
 
 :root{
@@ -346,9 +346,9 @@ a{color:inherit;text-decoration:none}
 .card{
   position:relative;
   overflow:hidden;
-  margin-bottom:14px;
-  padding:22px;
-  border-radius:var(--r-lg);
+  margin-bottom:12px;               /* was 14px — compact */
+  padding:20px;                     /* was 22px — compact */
+  border-radius:20px;               /* was 24px — compact */
   border:1px solid var(--line);
   background:
     linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,0) 55%),
@@ -411,6 +411,14 @@ a{color:inherit;text-decoration:none}
   font-size:13px;
   padding:26px 8px;
   line-height:1.6;
+}
+
+/* ---------- Compact pages: Earn / Referral / Wallet ---------- */
+#pageEarn .card,
+#pageReferral .card,
+#pageWallet .card{
+  padding:18px;                    /* tighter than base card */
+  margin-bottom:10px;
 }
 
 /* ---------- Buttons ---------- */
@@ -557,26 +565,26 @@ a{color:inherit;text-decoration:none}
 }
 
 /* ============================================================
-   BOOST SHORTCUT — Small rectangle with green radial edges
+   BOOST SHORTCUT — Compact ⚡×20 pill with periodic shake
    ============================================================ */
 .boost-shortcut{
   position:absolute;
-  top:14px;
-  right:14px;
+  top:12px;
+  right:12px;
   z-index:10;
   display:inline-flex;
   align-items:center;
-  gap:5px;
-  padding:7px 12px;
+  gap:4px;
+  padding:5px 9px;
   border:1.5px solid rgba(0,255,102,.7);
-  border-radius:12px;
+  border-radius:10px;
   background:linear-gradient(135deg,rgba(0,255,102,.18),rgba(0,255,102,.05));
   color:#fff;
   cursor:pointer;
   font-family:var(--f-num);
-  font-size:10.5px;
+  font-size:11px;
   font-weight:800;
-  letter-spacing:.08em;
+  letter-spacing:.04em;
   text-transform:uppercase;
   box-shadow:
     0 0 20px -4px rgba(0,255,102,.6),
@@ -584,14 +592,15 @@ a{color:inherit;text-decoration:none}
     0 2px 8px rgba(0,0,0,.3);
   transition:transform .2s ease,box-shadow .3s;
   -webkit-tap-highlight-color:transparent;
-  animation:boostGreenPulse 2.5s ease-in-out infinite;
+  animation:boostGreenPulse 2.5s ease-in-out infinite,
+            boostShake 6s ease-in-out infinite;
   overflow:hidden;
 }
 .boost-shortcut::before{
   content:"";
   position:absolute;
   inset:-6px;
-  border-radius:16px;
+  border-radius:14px;
   background:radial-gradient(ellipse at center,rgba(0,255,102,.35),transparent 70%);
   z-index:-1;
   animation:boostGreenGlow 2.5s ease-in-out infinite;
@@ -614,24 +623,18 @@ a{color:inherit;text-decoration:none}
     0 0 0 1px rgba(0,255,102,.4) inset;
 }
 .boost-shortcut i{
-  font-size:11px;
+  font-size:10px;
   color:var(--fire-2);
   filter:drop-shadow(0 0 6px rgba(57,255,136,.9));
   flex-shrink:0;
 }
-.boost-shortcut-text{
-  color:var(--fire-2);
-  font-weight:800;
-  text-shadow:0 0 8px rgba(57,255,136,.6);
-}
 .boost-shortcut-mult{
   color:var(--gold-bright);
   font-weight:800;
-  font-size:11.5px;
+  font-size:12px;
+  line-height:1;
   text-shadow:0 0 8px rgba(77,255,148,.9);
-  padding-left:8px;
-  border-left:1px solid rgba(0,255,102,.35);
-  margin-left:2px;
+  letter-spacing:.01em;
 }
 @keyframes boostGreenPulse{
   0%,100%{
@@ -653,6 +656,13 @@ a{color:inherit;text-decoration:none}
 }
 @keyframes boostShimmer{
   60%,100%{transform:translateX(120%);}
+}
+/* Periodic shake to draw attention every ~6s */
+@keyframes boostShake{
+  0%, 88%, 100%{transform:translateX(0) rotate(0);}
+  90%{transform:translateX(-2px) rotate(-3deg);}
+  93%{transform:translateX(2px) rotate(3deg);}
+  96%{transform:translateX(-1px) rotate(-2deg);}
 }
 
 .mining-ring-container{
@@ -1529,7 +1539,7 @@ a{color:inherit;text-decoration:none}
 /* ---------- Referral ---------- */
 .invite-card{
   text-align:center;
-  padding:30px 22px;
+  padding:24px 18px;                /* was 30px 22px — compact */
   border-color:rgba(0,255,102,.36);
   background:
     radial-gradient(100% 75% at 50% 0%,rgba(0,255,102,.24),transparent 72%),
@@ -1604,7 +1614,7 @@ a{color:inherit;text-decoration:none}
 
 /* Referral earnings card */
 .referral-earnings-card{
-  padding:20px 22px;
+  padding:18px;                     /* was 20px 22px — compact */
   background:
     linear-gradient(180deg,rgba(0,232,92,.14),rgba(0,232,92,.02)),
     var(--surface);
@@ -1658,7 +1668,7 @@ a{color:inherit;text-decoration:none}
 
 /* Referral link card */
 .referral-link-card{
-  padding:20px 22px;
+  padding:18px;                     /* was 20px 22px — compact */
   position:relative;
   overflow:hidden;
 }
@@ -2131,9 +2141,9 @@ a{color:inherit;text-decoration:none}
   .user-avatar{width:40px;height:40px}
   .wallet-balance{font-size:15.5px}
   .app-header{padding-top:calc(10px + var(--safe-t))}
-  .boost-shortcut{padding:6px 10px;font-size:9.5px;top:10px;right:10px;border-radius:10px}
-  .boost-shortcut i{font-size:10px}
-  .boost-shortcut-mult{font-size:10.5px;padding-left:6px;margin-left:1px}
+  .boost-shortcut{padding:4px 7px;font-size:10px;top:10px;right:10px;border-radius:8px}
+  .boost-shortcut i{font-size:9px}
+  .boost-shortcut-mult{font-size:11px}
   .boost-scroll{gap:8px}
   .boost-card{padding:14px 6px 12px}
   .boost-icon{width:42px;height:42px;font-size:20px}
@@ -2141,6 +2151,10 @@ a{color:inherit;text-decoration:none}
   .boost-earn-row{font-size:9px}
   .boost-earn-row strong{font-size:9.5px}
   .boost-modal-stats{grid-template-columns:1fr}
+  .card{padding:17px;border-radius:18px;margin-bottom:10px}
+  #pageEarn .card,
+  #pageReferral .card,
+  #pageWallet .card{padding:15px;margin-bottom:9px}
 }
 
 /* ---------- Responsive — Medium (361-390px) ---------- */
@@ -2153,7 +2167,7 @@ a{color:inherit;text-decoration:none}
 @media (min-width:430px){
   .app-container{padding-left:20px;padding-right:20px}
   .app-header{margin:0 -20px 20px;padding-left:20px;padding-right:20px}
-  .card{padding:24px}
+  .card{padding:22px}
   .mining-ring-container{width:252px}
   .core-amount{font-size:46px}
 }
