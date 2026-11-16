@@ -1,13 +1,10 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.6
+// GROYPER MINE — EMBER VAULT v2.7
 // Full rewrite — legendary edition with all fixes and new integrations.
-// Fixes:    referral link (/Mine?startapp=), Adexium API, ad loading freeze,
-//           UI feedback, strict task verification, full responsiveness
-// Adds:     Monetag + Adexium random rotation, fallback ads,
-//           ad before mining claim, 3-hour cooldown, 10 GROYP reward,
-//           new boost plans (3x/8x/20x, 3/6/15 TON, 7 days),
-//           localStorage ad tracking (no DB until claim),
-//           boost shortcut button, dynamic boost rendering
+// Fixes:    adexiumWidget (not adexiumAds), adPlaybackCompleted as success,
+//           alternating providers (Monetag → Adexium → Monetag → ...),
+//           no auto-show, no freeze
+// Adds:     everything from v2.6 + these corrections
 // ============================================================================
 'use strict';
 
@@ -71,6 +68,7 @@ let miningTimer = null;
 let livePriceData = { price: 0, change24h: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
 let adsState = { watched: 0, accumulated: 0, token: null };
 let adWatchedLocal = 0;
+let lastAdProvider = 'adexium';  // for alternating: starts with Adexium → next is Monetag
 let booted = false;
 let serverOffset = 0;
 let lastPriceFetch = 0;
@@ -585,7 +583,7 @@ async function claimMining() {
 
         // 2. UI feedback
         if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Watching...';
-        showToast(`🎬 Watching ${provider}...`, 'info', 2000);
+        showToast(`🎬 Watching ad...`, 'info', 2000);
 
         // 3. Wait minimum gap
         await sleep((CONFIG.ADS_MIN_GAP_SEC || 15) * 1000);
@@ -614,7 +612,7 @@ async function claimMining() {
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — Monetag + Adexium (manual only, localStorage tracking)
+// 10. ADS — Monetag + Adexium (alternating, manual only, localStorage tracking)
 // ----------------------------------------------------------------------------
 function loadAdsState() {
     try {
@@ -688,51 +686,58 @@ function renderAds() {
     if (claimLabel) claimLabel.textContent = `CLAIM ${CONFIG.ADS_BATCH_REWARD} ${CONFIG.tokenSymbol}`;
 }
 
-// Adexium — use official API (requestAd + displayAd)
+// Adexium — request + wait for playback completion
 function showAdexiumAd() {
-    const ads = window.adexiumAds;
-    if (!ads) {
-        console.warn('❌ Adexium: not initialized');
-        return false;
+    const w = window.adexiumWidget;
+    if (!w) {
+        console.warn('❌ Adexium: widget not initialized');
+        return Promise.resolve(false);
     }
 
-    try {
-        // Reset state
+    return new Promise((resolve) => {
         window.__adexiumAdState = 'requesting';
         window.__adexiumAd = null;
 
-        // Request ad — triggers 'adReceived' or 'noAdFound'
-        ads.requestAd('interstitial');
-        console.log('📺 Adexium: requestAd sent');
-        return true;
-    } catch (e) {
-        console.warn('Adexium requestAd failed:', e);
-        window.__adexiumAdState = 'error';
-        return false;
-    }
-}
-
-// Wait for Adexium ad to be received
-function waitForAdexiumAd(timeoutMs = 10000) {
-    return new Promise((resolve) => {
-        const start = Date.now();
-        const check = () => {
-            const state = window.__adexiumAdState;
-            if (state === 'displayed' || state === 'completed' || state === 'closed') {
-                resolve(true);
-                return;
-            }
-            if (state === 'noAd' || state === 'error') {
-                resolve(false);
-                return;
-            }
-            if (Date.now() - start > timeoutMs) {
-                resolve(false);
-                return;
-            }
-            setTimeout(check, 200);
+        let resolved = false;
+        const finish = (success) => {
+            if (resolved) return;
+            resolved = true;
+            clearTimeout(timeout);
+            clearInterval(check);
+            resolve(success);
         };
-        check();
+
+        // Timeout: 45s (enough for full playback + close)
+        const timeout = setTimeout(() => {
+            console.warn('⏰ Adexium: timeout after 45s');
+            finish(false);
+        }, 45000);
+
+        const check = setInterval(() => {
+            const state = window.__adexiumAdState;
+            
+            // ✅ Success ONLY on playbackCompleted
+            if (state === 'completed') {
+                console.log('✅ Adexium: playback completed');
+                finish(true);
+                return;
+            }
+            
+            // ❌ Failure: no ad, error, or closed before completion
+            if (state === 'noAd' || state === 'error' || state === 'closed') {
+                console.warn(`❌ Adexium: ${state}`);
+                finish(false);
+                return;
+            }
+        }, 200);
+
+        try {
+            w.requestAd('interstitial');
+            console.log('📺 Adexium: requestAd sent');
+        } catch (e) {
+            console.warn('Adexium requestAd failed:', e);
+            finish(false);
+        }
     });
 }
 
@@ -761,40 +766,55 @@ function showMonetagAd() {
     }
 }
 
-// Try each provider with fallback
+// Alternating providers: Monetag → Adexium → Monetag → Adexium → ...
 async function tryTriggerAdSDK() {
-    const providers = [];
-    if (typeof window.show_12265394 === 'function') providers.push('monetag');
-    if (window.adexiumAds) providers.push('adexium');
+    const hasMonetag = typeof window.show_12265394 === 'function';
+    const hasAdexium = !!window.adexiumWidget;
 
-    if (!providers.length) {
+    if (!hasMonetag && !hasAdexium) {
         console.error('❌ No ad providers available');
         return null;
     }
 
-    const shuffled = providers.sort(() => Math.random() - 0.5);
-
-    for (const provider of shuffled) {
-        console.log(`🎯 Trying: ${provider}`);
-
-        if (provider === 'monetag') {
-            if (showMonetagAd()) return 'monetag';
-            console.log('↩️ Monetag failed, trying next...');
-            continue;
+    // If only one available → use it
+    if (!hasMonetag) {
+        const ok = await showAdexiumAd();
+        if (ok) lastAdProvider = 'adexium';
+        return ok ? 'adexium' : null;
+    }
+    if (!hasAdexium) {
+        if (showMonetagAd()) {
+            lastAdProvider = 'monetag';
+            return 'monetag';
         }
+        return null;
+    }
 
-        if (provider === 'adexium') {
-            if (showAdexiumAd()) {
-                const ok = await waitForAdexiumAd(10000);
-                if (ok) {
-                    console.log('✅ Adexium displayed');
-                    return 'adexium';
-                }
-                console.warn('⚠️ Adexium no ad found, trying next...');
-                continue;
-            }
-            console.log('↩️ Adexium request failed, trying next...');
-            continue;
+    // ✅ Alternating: switch from last
+    const nextProvider = lastAdProvider === 'adexium' ? 'monetag' : 'adexium';
+    console.log(`🎯 Trying: ${nextProvider} (last was ${lastAdProvider})`);
+
+    if (nextProvider === 'monetag') {
+        if (showMonetagAd()) {
+            lastAdProvider = 'monetag';
+            return 'monetag';
+        }
+        // Fallback
+        console.log('↩️ Monetag failed, trying Adexium...');
+        if (await showAdexiumAd()) {
+            lastAdProvider = 'adexium';
+            return 'adexium';
+        }
+    } else {
+        if (await showAdexiumAd()) {
+            lastAdProvider = 'adexium';
+            return 'adexium';
+        }
+        // Fallback
+        console.log('↩️ Adexium failed, trying Monetag...');
+        if (showMonetagAd()) {
+            lastAdProvider = 'monetag';
+            return 'monetag';
         }
     }
 
@@ -816,16 +836,16 @@ async function watchAd() {
     }
 
     try {
-        // 1. Show ad
+        // 1. Show ad (with alternating providers)
         const provider = await tryTriggerAdSDK();
         if (!provider) {
             showToast('No ad available. Try again.', 'error');
             return;
         }
 
-        // 2. UI feedback
+        // 2. UI feedback (do NOT show provider name)
         if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Watching...';
-        showToast(`🎬 Watching ${provider}...`, 'info', 2000);
+        showToast('🎬 Watching ad...', 'info', 2000);
 
         // 3. Wait minimum gap
         await sleep((CONFIG.ADS_MIN_GAP_SEC || 15) * 1000);
