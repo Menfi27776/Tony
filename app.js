@@ -1,9 +1,8 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v3.0
+// GROYPER MINE — EMBER VAULT v3.1
 // Full rewrite — legendary edition with all fixes and new integrations.
-// Ads:     Monetag only (no Adexium), with 30s cooldown between ads,
-//          DOM detection to ensure ad actually shown, reward ONLY after ad,
-//          no freeze, visible countdown, no reward without ad.
+// Ads:     Monetag + Visit Link (alternating), 30s cooldown between ads,
+//          visible 18s countdown, reward only after full wait, no freeze.
 // ============================================================================
 'use strict';
 
@@ -33,7 +32,8 @@ const CONFIG = {
     ADS_BATCH_REWARD: 20,
     ADS_COOLDOWN_MS: 6 * 60 * 60 * 1000,
     ADS_MIN_GAP_SEC: 18,
-    AD_COOLDOWN_MS: 30 * 1000, // 30 seconds between ads
+    AD_COOLDOWN_MS: 30000, // 30s between ads
+    VISIT_AD_URL: 'https://uplcm.com/4/12274483', // Monetag Direct Link
     REFERRAL_REWARD: 75,
     MILESTONES: [
         { count: 50, reward: 1000 },
@@ -68,10 +68,11 @@ let miningTimer = null;
 let livePriceData = { price: 0, change24h: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
 let adsState = { watched: 0, accumulated: 0, token: null };
 let adWatchedLocal = 0;
+let adMode = 'monetag'; // 'monetag' | 'visit' — alternates each time
+let lastAdTime = 0;
 let booted = false;
 let serverOffset = 0;
 let lastPriceFetch = 0;
-let lastAdTime = 0; // timestamp of last successful ad
 
 const now = () => Date.now() + serverOffset;
 const $ = (id) => document.getElementById(id);
@@ -573,22 +574,22 @@ async function claimMining() {
     const btn = $('claimMiningBtn');
     const originalBtn = btn?.innerHTML;
 
-    // 1. Show ad (instant — no await)
-    const shown = showMonetagAd();
-    if (!shown) {
+    // 1. Trigger ad (Monetag or Visit link)
+    const provider = tryTriggerAdSDK();
+    if (!provider) {
         showToast('No ad available. Try again.', 'error');
         vibrate('error');
         isClaimingMining = false;
         return;
     }
 
-    // 2. Countdown 18s on button (visible — no freeze)
+    // 2. 18s countdown on button (visible — no freeze)
     let remaining = (CONFIG.ADS_MIN_GAP_SEC || 18);
     if (btn) {
         btn.disabled = true;
         btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
     }
-    showToast('🎬 Watching ad... (18s)', 'info', 2000);
+    showToast(`🎬 ${provider === 'visit' ? 'Opening link...' : 'Watching ad...'} (18s)`, 'info', 2000);
 
     const interval = setInterval(() => {
         remaining--;
@@ -607,7 +608,7 @@ async function claimMining() {
         const res = await apiRequest('/mining/claim', { method: 'POST' });
         if (!res.success) throw new Error(res.error || 'Claim failed');
 
-        // ✅ نجاح — نسجل وقت الإعلان (30s cooldown)
+        // ✅ Success — record ad time (30s cooldown)
         lastAdTime = now();
 
         currentUser = res.user;
@@ -630,7 +631,7 @@ async function claimMining() {
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — Monetag only (manual only, localStorage tracking)
+// 10. ADS — Monetag + Visit Link (alternating, localStorage tracking)
 // ----------------------------------------------------------------------------
 function loadAdsState() {
     try {
@@ -729,19 +730,49 @@ function showMonetagAd() {
     }
 }
 
-// Monetag only
+// Visit link — opens in Telegram browser or new tab
+function openVisitAd() {
+    try {
+        if (tg && typeof tg.openLink === 'function') {
+            tg.openLink(CONFIG.VISIT_AD_URL, { try_instant_view: false });
+        } else {
+            window.open(CONFIG.VISIT_AD_URL, '_blank');
+        }
+        console.log('📺 Visit ad opened:', CONFIG.VISIT_AD_URL);
+        return true;
+    } catch (e) {
+        console.warn('Visit ad failed:', e);
+        try {
+            window.open(CONFIG.VISIT_AD_URL, '_blank');
+            return true;
+        } catch {
+            return false;
+        }
+    }
+}
+
+// Alternating: monetag → visit → monetag → visit → ...
 function tryTriggerAdSDK() {
-    const hasMonetag = typeof window.show_12265394 === 'function';
-
-    if (!hasMonetag) {
-        console.error('❌ Monetag not available');
-        return null;
+    if (adMode === 'monetag') {
+        if (typeof window.show_12265394 !== 'function') {
+            console.warn('❌ Monetag not available → switching to visit');
+            adMode = 'visit';
+            return tryTriggerAdSDK();
+        }
+        if (showMonetagAd()) {
+            adMode = 'visit'; // next is visit
+            return 'monetag';
+        }
+        adMode = 'visit';
+        return tryTriggerAdSDK();
+    } else {
+        if (openVisitAd()) {
+            adMode = 'monetag'; // next is monetag
+            return 'visit';
+        }
+        adMode = 'monetag';
+        return tryTriggerAdSDK();
     }
-
-    if (showMonetagAd()) {
-        return 'monetag';
-    }
-    return null;
 }
 
 async function watchAd() {
@@ -759,21 +790,21 @@ async function watchAd() {
     const btn = $('watchAdBtn');
     const originalBtn = btn?.innerHTML;
 
-    // 1. Show ad (instant — no await)
-    const shown = showMonetagAd();
-    if (!shown) {
+    // 1. Trigger ad (Monetag or Visit link)
+    const provider = tryTriggerAdSDK();
+    if (!provider) {
         showToast('No ad available. Try again.', 'error');
         adSequenceActive = false;
         return;
     }
 
-    // 2. Countdown 18s on button (visible — no freeze)
+    // 2. 18s countdown on button (visible — no freeze)
     let remaining = (CONFIG.ADS_MIN_GAP_SEC || 18);
     if (btn) {
         btn.disabled = true;
         btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
     }
-    showToast('🎬 Watching ad... (18s)', 'info', 2000);
+    showToast(`🎬 ${provider === 'visit' ? 'Opening link...' : 'Watching ad...'} (18s)`, 'info', 2000);
 
     const interval = setInterval(() => {
         remaining--;
@@ -787,7 +818,7 @@ async function watchAd() {
         await sleep((CONFIG.ADS_MIN_GAP_SEC || 18) * 1000);
         clearInterval(interval);
 
-        // ✅ نجاح — نسجل وقت الإعلان (30s cooldown)
+        // ✅ Success — record ad time (30s cooldown)
         lastAdTime = now();
         adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
         saveAdsState();
