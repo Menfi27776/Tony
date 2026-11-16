@@ -8,6 +8,7 @@
 //   - Removed /ads/start and /ads/watch (frontend-only ads)
 //   - fee required on EVERY withdrawal + diagnostics
 //   - Withdraw fee: no automatic tonapi verification, boc fingerprint + replay protection
+//   - /giftboost admin command (grant mining boost to any user, hours-based)
 // ============================================================================
 'use strict';
 
@@ -762,6 +763,89 @@ bot.command('addbalance', async (ctx) => {
     }
 
     log(`Admin ${ADMIN_ID} added ${amount} to user ${uid} (new balance ${newBalance})`);
+});
+
+// ---- /giftboost ----
+bot.command('giftboost', async (ctx) => {
+    if (!isAdmin(ctx)) return;
+
+    const parts = ctx.message.text.split(/\s+/);
+    const target = parts[1];
+    const type = parts[2];
+    const hours = Number(parts[3]);
+
+    if (!target || !type || !hours) {
+        return ctx.replyWithHTML(
+            '🎁 <b>Gift Boost</b>\n\n' +
+            'Usage: <code>/giftboost &lt;userId_or_@username&gt; &lt;bronze|silver|gold&gt; &lt;hours&gt;</code>\n\n' +
+            'Examples:\n' +
+            '<code>/giftboost 123456789 silver 3</code> → BLAZE 8x for 3 hours\n' +
+            '<code>/giftboost @username gold 168</code> → INFERNO 20x for 7 days\n\n' +
+            '• bronze = SPARK (3x)\n' +
+            '• silver = BLAZE (8x)\n' +
+            '• gold   = INFERNO (20x)'
+        );
+    }
+
+    const cfg = await getConfig();
+    const boost = cfg.boosts[type];
+    if (!boost) {
+        return ctx.reply('❌ Invalid boost type. Use: bronze, silver, gold');
+    }
+
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 8760) {
+        return ctx.reply('❌ Hours must be between 1 and 8760 (1 year max)');
+    }
+
+    // Find user (same logic as /addbalance)
+    let uid = null;
+    if (/^\d{5,15}$/.test(target)) {
+        uid = target;
+    } else if (/^@\w+$/.test(target)) {
+        const username = target.slice(1).toLowerCase();
+        const snap = await db.collection('users').limit(1000).get();
+        for (const d of snap.docs) {
+            const u = d.data();
+            if ((u.username || '').toLowerCase() === username) {
+                uid = d.id;
+                break;
+            }
+        }
+        if (!uid) return ctx.reply(`❌ User @${username} not found in first 1000 records`);
+    } else {
+        return ctx.reply('❌ Invalid target. Use numeric ID or @username');
+    }
+
+    const ref = userRef(uid);
+    const snap = await ref.get();
+    if (!snap.exists) return ctx.reply('❌ User not found in database');
+
+    const u = snap.data();
+    const expiresAt = Date.now() + hours * 3600e3;
+
+    await ref.update({
+        boostMultiplier: boost.mult,
+        boostType: type,
+        boostExpiresAt: expiresAt
+    });
+
+    notify(uid,
+        `🎁 <b>Admin gifted you a boost!</b>\n\n` +
+        `⚡ <b>${boost.name} (${boost.mult}x)</b>\n` +
+        `⏱️ Duration: <b>${hours} hour${hours > 1 ? 's' : ''}</b>\n` +
+        `📅 Expires: ${new Date(expiresAt).toLocaleString()}\n\n` +
+        `Start mining with your new power!`
+    );
+
+    await ctx.replyWithHTML(
+        `✅ <b>Boost gifted</b>\n\n` +
+        `👤 User: @${esc(u.username || '')} (${uid})\n` +
+        `⚡ Boost: <b>${boost.name} (${boost.mult}x)</b>\n` +
+        `⏱️ Duration: <b>${hours} hour${hours > 1 ? 's' : ''}</b>\n` +
+        `📅 Expires: ${new Date(expiresAt).toLocaleString()}`
+    );
+
+    log(`Admin ${ADMIN_ID} gifted ${type} (${hours}h) to user ${uid}`);
 });
 
 // ---- Admin actions ----
