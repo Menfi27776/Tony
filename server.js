@@ -9,6 +9,8 @@
 //   - fee required on EVERY withdrawal + diagnostics
 //   - Withdraw fee: no automatic tonapi verification, boc fingerprint + replay protection
 //   - /giftboost admin command (grant mining boost to any user, hours-based)
+//   - v3.4: Force-canonical boost economy (ignore stale Firestore values),
+//           strict mult() whitelist (only 1/3/8/20 accepted)
 // ============================================================================
 'use strict';
 
@@ -113,6 +115,9 @@ const DEFAULTS = {
     banner: ''
 };
 
+// Canonical boost multipliers — the ONLY values accepted at runtime
+const VALID_BOOST_MULTS = [1, 3, 8, 20];
+
 const memCache = new Map();
 const cached = async (key, ttl, fn) => {
     const c = memCache.get(key);
@@ -125,7 +130,17 @@ const bust = (k) => memCache.delete(k);
 
 const getConfig = () => cached('config', 60000, async () => {
     const s = await db.doc('settings/config').get();
-    return { ...DEFAULTS, ...(s.exists ? s.data() : {}) };
+    const stored = s.exists ? s.data() : {};
+    const merged = { ...DEFAULTS, ...stored };
+
+    // ✅ v3.4: Force-canonical values for critical economy fields.
+    // Any stale / corrupted values in Firestore are ignored.
+    merged.boosts      = DEFAULTS.boosts;
+    merged.boostDays   = DEFAULTS.boostDays;
+    merged.miningReward = DEFAULTS.miningReward;
+    merged.cooldownMs  = DEFAULTS.cooldownMs;
+
+    return merged;
 });
 
 const setConfig = async (patch) => {
@@ -152,7 +167,8 @@ const publicConfig = (c) => ({
     minAccountAgeHours: c.minAccountAgeHours,
     referralReward: c.referralReward,
     milestones: c.milestones,
-    boosts: c.boosts,
+    // ✅ v3.4: Always send canonical boosts to the frontend
+    boosts: DEFAULTS.boosts,
     boostDays: c.boostDays,
     checkinRewards: c.checkinRewards,
     withdrawEnabled: !!c.withdrawEnabled,
@@ -343,7 +359,11 @@ const pub = (u) => {
     return o;
 };
 
-const mult = (u, now = Date.now()) => (u.boostMultiplier > 1 && u.boostExpiresAt > now ? u.boostMultiplier : 1);
+// ✅ v3.4: Strict whitelist — only canonical multipliers accepted
+const mult = (u, now = Date.now()) => {
+    if (!(u.boostMultiplier > 1 && u.boostExpiresAt > now)) return 1;
+    return VALID_BOOST_MULTS.includes(u.boostMultiplier) ? u.boostMultiplier : 1;
+};
 
 const newUser = (tg) => ({
     userId: tg.id,
@@ -787,8 +807,8 @@ bot.command('giftboost', async (ctx) => {
         );
     }
 
-    const cfg = await getConfig();
-    const boost = cfg.boosts[type];
+    // ✅ v3.4: Use canonical DEFAULTS.boosts (never Firestore)
+    const boost = DEFAULTS.boosts[type];
     if (!boost) {
         return ctx.reply('❌ Invalid boost type. Use: bronze, silver, gold');
     }
@@ -1722,7 +1742,8 @@ api.post('/boost/intent', h(async (req, res) => {
     const id = req.tg.id;
     const nowMs = Date.now();
     const type = String(req.body?.type || '');
-    const b = cfg.boosts[type];
+    // ✅ v3.4: Always use canonical DEFAULTS.boosts (never Firestore)
+    const b = DEFAULTS.boosts[type];
     if (!b) throw new AppErr('Invalid boost');
 
     const s = await userRef(id).get();
@@ -1763,7 +1784,8 @@ api.post('/boost/confirm', h(async (req, res) => {
         throw new AppErr('Request expired. Please start again.');
     }
 
-    const b = cfg.boosts[it.type];
+    // ✅ v3.4: Always use canonical DEFAULTS.boosts (never Firestore)
+    const b = DEFAULTS.boosts[it.type];
     if (!b) throw new AppErr('Invalid boost');
     const hash = await verifyPayment(it, String(req.body?.boc || ''));
     const exp = Date.now() + cfg.boostDays * 86400e3;
