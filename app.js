@@ -1,10 +1,10 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.8
+// GROYPER MINE — EMBER VAULT v2.9
 // Full rewrite — legendary edition with all fixes and new integrations.
-// Fixes:    adexiumWidget (not adexiumAds), adPlaybackCompleted as success,
-//           alternating providers (Monetag → Adexium → Monetag → ...),
-//           no freeze, no reward without ad
-// Adds:     everything from v2.6 + these corrections
+// Removed:  Adexium completely (CDN, init, events, all references)
+// Kept:     Monetag only (showMonetagAd, tryTriggerAdSDK)
+// Fixes:    no more alternation, no more adexiumWidget, no more lastAdProvider
+// Adds:     everything else preserved from v2.8
 // ============================================================================
 'use strict';
 
@@ -68,7 +68,6 @@ let miningTimer = null;
 let livePriceData = { price: 0, change24h: 0, mcap: 0, fdv: 0, liq: 0, vol: 0 };
 let adsState = { watched: 0, accumulated: 0, token: null };
 let adWatchedLocal = 0;
-let lastAdProvider = 'adexium';  // for alternating: starts with Adexium → next is Monetag
 let booted = false;
 let serverOffset = 0;
 let lastPriceFetch = 0;
@@ -612,7 +611,7 @@ async function claimMining() {
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — Monetag + Adexium (alternating, manual only, localStorage tracking)
+// 10. ADS — Monetag only (manual only, localStorage tracking)
 // ----------------------------------------------------------------------------
 function loadAdsState() {
     try {
@@ -686,61 +685,6 @@ function renderAds() {
     if (claimLabel) claimLabel.textContent = `CLAIM ${CONFIG.ADS_BATCH_REWARD} ${CONFIG.tokenSymbol}`;
 }
 
-// Adexium — request + wait for playback completion
-function showAdexiumAd() {
-    const w = window.adexiumWidget;
-    if (!w) {
-        console.warn('❌ Adexium: widget not initialized');
-        return Promise.resolve(false);
-    }
-
-    return new Promise((resolve) => {
-        window.__adexiumAdState = 'requesting';
-        window.__adexiumAd = null;
-
-        let resolved = false;
-        const finish = (success) => {
-            if (resolved) return;
-            resolved = true;
-            clearTimeout(timeout);
-            clearInterval(check);
-            resolve(success);
-        };
-
-        // Timeout: 45s (enough for full playback + close)
-        const timeout = setTimeout(() => {
-            console.warn('⏰ Adexium: timeout after 45s');
-            finish(false);
-        }, 45000);
-
-        const check = setInterval(() => {
-            const state = window.__adexiumAdState;
-            
-            // ✅ Success ONLY on playbackCompleted
-            if (state === 'completed') {
-                console.log('✅ Adexium: playback completed');
-                finish(true);
-                return;
-            }
-            
-            // ❌ Failure: no ad, error, or closed before completion
-            if (state === 'noAd' || state === 'error' || state === 'closed') {
-                console.warn(`❌ Adexium: ${state}`);
-                finish(false);
-                return;
-            }
-        }, 200);
-
-        try {
-            w.requestAd('interstitial');
-            console.log('📺 Adexium: requestAd sent');
-        } catch (e) {
-            console.warn('Adexium requestAd failed:', e);
-            finish(false);
-        }
-    });
-}
-
 // Monetag — with heuristic wait
 function showMonetagAd() {
     if (typeof window.show_12265394 !== 'function') {
@@ -784,57 +728,19 @@ function showMonetagAd() {
     });
 }
 
-// Alternating providers: Monetag → Adexium → Monetag → Adexium → ...
+// Monetag only
 async function tryTriggerAdSDK() {
     const hasMonetag = typeof window.show_12265394 === 'function';
-    const hasAdexium = !!window.adexiumWidget;
 
-    if (!hasMonetag && !hasAdexium) {
-        console.error('❌ No ad providers available');
+    if (!hasMonetag) {
+        console.error('❌ Monetag not available');
         return null;
     }
 
-    // If only one available → use it
-    if (!hasMonetag) {
-        const ok = await showAdexiumAd();
-        if (ok) lastAdProvider = 'adexium';
-        return ok ? 'adexium' : null;
+    const ok = await showMonetagAd();
+    if (ok) {
+        return 'monetag';
     }
-    if (!hasAdexium) {
-        const ok = await showMonetagAd();
-        if (ok) lastAdProvider = 'monetag';
-        return ok ? 'monetag' : null;
-    }
-
-    // ✅ Alternating: switch from last
-    const nextProvider = lastAdProvider === 'adexium' ? 'monetag' : 'adexium';
-    console.log(`🎯 Trying: ${nextProvider} (last was ${lastAdProvider})`);
-
-    if (nextProvider === 'monetag') {
-        if (await showMonetagAd()) {
-            lastAdProvider = 'monetag';
-            return 'monetag';
-        }
-        // Fallback
-        console.log('↩️ Monetag failed, trying Adexium...');
-        if (await showAdexiumAd()) {
-            lastAdProvider = 'adexium';
-            return 'adexium';
-        }
-    } else {
-        if (await showAdexiumAd()) {
-            lastAdProvider = 'adexium';
-            return 'adexium';
-        }
-        // Fallback
-        console.log('↩️ Adexium failed, trying Monetag...');
-        if (await showMonetagAd()) {
-            lastAdProvider = 'monetag';
-            return 'monetag';
-        }
-    }
-
-    console.error('❌ All providers failed');
     return null;
 }
 
@@ -852,7 +758,7 @@ async function watchAd() {
     }
 
     try {
-        // 1. Show ad (with alternating providers)
+        // 1. Show ad
         const provider = await tryTriggerAdSDK();
         if (!provider) {
             showToast('No ad available. Try again.', 'error');
