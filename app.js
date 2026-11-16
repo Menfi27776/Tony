@@ -1,10 +1,13 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v2.9
+// GROYPER MINE — EMBER VAULT v2.10
 // Full rewrite — legendary edition with all fixes and new integrations.
 // Removed:  Adexium completely (CDN, init, events, all references)
 // Kept:     Monetag only (showMonetagAd, tryTriggerAdSDK)
-// Fixes:    no more alternation, no more adexiumWidget, no more lastAdProvider
-// Adds:     everything else preserved from v2.8
+// Fixes:    no more freeze — showMonetagAd returns immediately
+//           no more 18s wait AFTER show — show returns instantly
+//           reward only AFTER 18s countdown (visible on button)
+//           watchAd and claimMining both use the same pattern
+// Adds:     everything else preserved from v2.9
 // ============================================================================
 'use strict';
 
@@ -33,7 +36,7 @@ const CONFIG = {
     MAX_ADS_PER_BATCH: 10,
     ADS_BATCH_REWARD: 20,
     ADS_COOLDOWN_MS: 6 * 60 * 60 * 1000,
-    ADS_MIN_GAP_SEC: 15,
+    ADS_MIN_GAP_SEC: 18,
     REFERRAL_REWARD: 75,
     MILESTONES: [
         { count: 50, reward: 1000 },
@@ -566,28 +569,36 @@ async function claimMining() {
     const btn = $('claimMiningBtn');
     const originalBtn = btn?.innerHTML;
 
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...';
+    // 1. Show ad (instant — no await)
+    const provider = tryTriggerAdSDK();
+    if (!provider) {
+        showToast('No ad available. Try again.', 'error');
+        vibrate('error');
+        isClaimingMining = false;
+        return;
     }
 
-    try {
-        // 1. Show ad (with fallback)
-        const provider = await tryTriggerAdSDK();
-        if (!provider) {
-            showToast('No ad available. Try again.', 'error');
-            vibrate('error');
-            return;
+    // 2. Countdown 18s on button (visible — no freeze)
+    let remaining = (CONFIG.ADS_MIN_GAP_SEC || 18);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
+    }
+    showToast('🎬 Watching ad... (18s)', 'info', 2000);
+
+    const interval = setInterval(() => {
+        remaining--;
+        if (remaining > 0 && btn) {
+            btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
         }
+    }, 1000);
 
-        // 2. UI feedback (do NOT show provider name)
-        if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Watching...';
-        showToast('🎬 Watching ad...', 'info', 2000);
+    try {
+        // 3. Wait exactly 18s
+        await sleep((CONFIG.ADS_MIN_GAP_SEC || 18) * 1000);
+        clearInterval(interval);
 
-        // 3. Wait minimum gap
-        await sleep((CONFIG.ADS_MIN_GAP_SEC || 15) * 1000);
-
-        // 4. Claim on server
+        // 4. Claim on server AFTER 18s
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
         const res = await apiRequest('/mining/claim', { method: 'POST' });
         if (!res.success) throw new Error(res.error || 'Claim failed');
@@ -598,6 +609,7 @@ async function claimMining() {
         confetti();
         renderAll();
     } catch (e) {
+        clearInterval(interval);
         vibrate('error');
         showToast(e.message || 'Claim failed', 'error');
     } finally {
@@ -685,51 +697,33 @@ function renderAds() {
     if (claimLabel) claimLabel.textContent = `CLAIM ${CONFIG.ADS_BATCH_REWARD} ${CONFIG.tokenSymbol}`;
 }
 
-// Monetag — with heuristic wait
+// Monetag — instant call, no wait
 function showMonetagAd() {
     if (typeof window.show_12265394 !== 'function') {
         console.warn('❌ Monetag not available');
-        return Promise.resolve(false);
+        return false;
     }
-
-    return new Promise((resolve) => {
-        let resolved = false;
-        const finish = (success) => {
-            if (resolved) return;
-            resolved = true;
-            clearTimeout(timeout);
-            resolve(success);
-        };
-
-        // Timeout: 10s
-        const timeout = setTimeout(() => {
-            console.warn('⏰ Monetag: timeout');
-            finish(false);
-        }, 10000);
-
-        try {
-            window.show_12265394({
-                type: 'inApp',
-                inAppSettings: {
-                    frequency: 2,
-                    capping: 0.1,
-                    interval: 30,
-                    timeout: 5,
-                    everyPage: false
-                }
-            });
-            console.log('📺 Monetag called — waiting 3s');
-            // Wait 3 seconds (typical ad show time)
-            setTimeout(() => finish(true), 3000);
-        } catch (e) {
-            console.warn('Monetag failed:', e);
-            finish(false);
-        }
-    });
+    try {
+        window.show_12265394({
+            type: 'inApp',
+            inAppSettings: {
+                frequency: 2,
+                capping: 0.1,
+                interval: 30,
+                timeout: 5,
+                everyPage: false
+            }
+        });
+        console.log('📺 Monetag called');
+        return true;
+    } catch (e) {
+        console.warn('Monetag failed:', e);
+        return false;
+    }
 }
 
-// Monetag only
-async function tryTriggerAdSDK() {
+// Monetag only — instant
+function tryTriggerAdSDK() {
     const hasMonetag = typeof window.show_12265394 === 'function';
 
     if (!hasMonetag) {
@@ -737,8 +731,7 @@ async function tryTriggerAdSDK() {
         return null;
     }
 
-    const ok = await showMonetagAd();
-    if (ok) {
+    if (showMonetagAd()) {
         return 'monetag';
     }
     return null;
@@ -752,27 +745,36 @@ async function watchAd() {
     adSequenceActive = true;
     const btn = $('watchAdBtn');
     const originalBtn = btn?.innerHTML;
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+
+    // 1. Show ad (instant — no await)
+    const provider = tryTriggerAdSDK();
+    if (!provider) {
+        showToast('No ad available. Try again.', 'error');
+        adSequenceActive = false;
+        return;
     }
 
-    try {
-        // 1. Show ad
-        const provider = await tryTriggerAdSDK();
-        if (!provider) {
-            showToast('No ad available. Try again.', 'error');
-            return;
+    // 2. Countdown 18s on button (visible — no freeze)
+    let remaining = (CONFIG.ADS_MIN_GAP_SEC || 18);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
+    }
+    showToast('🎬 Watching ad... (18s)', 'info', 2000);
+
+    const interval = setInterval(() => {
+        remaining--;
+        if (remaining > 0 && btn) {
+            btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
         }
+    }, 1000);
 
-        // 2. UI feedback (do NOT show provider name)
-        if (btn) btn.innerHTML = '<i class="fas fa-eye"></i> Watching...';
-        showToast('🎬 Watching ad...', 'info', 2000);
+    try {
+        // 3. Wait exactly 18s
+        await sleep((CONFIG.ADS_MIN_GAP_SEC || 18) * 1000);
+        clearInterval(interval);
 
-        // 3. Wait minimum gap
-        await sleep((CONFIG.ADS_MIN_GAP_SEC || 15) * 1000);
-
-        // 4. Increment LOCAL count (no DB)
+        // 4. Increment LOCAL count AFTER 18s
         adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
         saveAdsState();
 
@@ -780,6 +782,7 @@ async function watchAd() {
         renderAds();
         showToast(`+${CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH} ${CONFIG.tokenSymbol}`, 'success');
     } catch (e) {
+        clearInterval(interval);
         vibrate('error');
         showToast(e.message || 'Ad failed', 'error');
     } finally {
