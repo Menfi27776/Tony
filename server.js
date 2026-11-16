@@ -1,17 +1,4 @@
 // ============================================================================
-// GROYPER MINE — SERVER v3.4
-// Express + Telegraf (polling) + Firebase Admin
-// All features preserved. Adds:
-//   - 3-hour cooldown, 10 GROYP reward
-//   - New boost plans (3x/8x/20x, 3/6/15 TON, 7 days)
-//   - /ads/claim accepts watchedCount only (frontend-synced)
-//   - Removed /ads/start and /ads/watch (frontend-only ads)
-//   - fee required on EVERY withdrawal + diagnostics
-//   - Withdraw fee: no automatic tonapi verification, boc fingerprint + replay protection
-//   - /giftboost admin command (grant mining boost to any user, hours-based)
-//   - v3.4: Force-canonical boost economy (ignore stale Firestore values),
-//           strict mult() whitelist (only 1/3/8/20 accepted)
-// ============================================================================
 'use strict';
 
 const express = require('express');
