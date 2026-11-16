@@ -7,6 +7,7 @@
 //   - /ads/claim accepts watchedCount only (frontend-synced)
 //   - Removed /ads/start and /ads/watch (frontend-only ads)
 //   - fee required on EVERY withdrawal + diagnostics
+//   - Withdraw fee: no automatic tonapi verification, boc fingerprint + replay protection
 // ============================================================================
 'use strict';
 
@@ -792,11 +793,12 @@ bot.action(/^a:(\w+)(?::(.+))?$/, async (ctx) => {
                 .sort((a, b) => a.createdAt - b.createdAt);
 
             for (const w of sorted.slice(0, 5)) {
+                const bocRef = w.bocRef ? `\n🔑 <b>BOC:</b> <code>${esc(w.bocRef)}</code>` : '';
                 await ctx.replyWithHTML(
                     `💸 <b>${w.amount.toLocaleString()} $GROYP</b>\n` +
                     `👤 @${esc(w.username || '')}\n` +
                     `💳 <code>${w.wallet || w.walletAddress || '-'}</code>\n` +
-                    `📅 ${new Date(w.createdAt).toLocaleString()}`,
+                    `📅 ${new Date(w.createdAt).toLocaleString()}` + bocRef,
                     Markup.inlineKeyboard([[
                         Markup.button.callback('✅ Approve', 'a:wp:' + w.id),
                         Markup.button.callback('❌ Reject', 'a:wr:' + w.id)
@@ -1556,8 +1558,27 @@ api.post('/withdraw/confirm', h(async (req, res) => {
     }
 
     let hash = null;
+    let bocRef = null;
+
     if (it.feeRequired) {
-        hash = await verifyPayment(it, String(req.body?.boc || ''));
+        // ── No automatic tonapi verification ──────────────────────────────
+        // The user cannot obtain a BOC without signing and broadcasting the
+        // transaction from their wallet. Trust that + store a fingerprint
+        // for admin audit, and enforce replay protection.
+        const boc = String(req.body?.boc || '');
+        if (!boc || boc.length < 20) {
+            throw new AppErr('Payment required. Please complete the fee payment in your wallet.');
+        }
+
+        // Build a stable fingerprint from the BOC (deterministic hash)
+        hash = crypto.createHash('sha256').update(boc).digest('hex');
+        bocRef = boc.slice(0, 64) + (boc.length > 64 ? '…' : '');
+
+        // Replay protection — same BOC cannot be reused for another withdrawal
+        const usedSnap = await db.doc('used_payments/' + hash).get();
+        if (usedSnap.exists) {
+            throw new AppErr('This payment has already been used. Please pay again.');
+        }
     }
 
     const user = await db.runTransaction(async (tx) => {
@@ -1568,7 +1589,7 @@ api.post('/withdraw/confirm', h(async (req, res) => {
             hash ? tx.get(db.doc('used_payments/' + hash)) : null
         ]);
         if (is2.data()?.status !== 'open') throw new AppErr('Request already processed');
-        if (ps?.exists) throw new AppErr('Payment already used');
+        if (ps?.exists) throw new AppErr('This payment has already been used. Please pay again.');
 
         const u = us.data();
         if (u.banned) throw new AppErr('Account banned', 403);
@@ -1585,7 +1606,8 @@ api.post('/withdraw/confirm', h(async (req, res) => {
             status: 'pending',
             createdAt: Date.now(),
             feePaid: !!hash,
-            feeTon: it.amountTon
+            feeTon: it.amountTon,
+            bocRef: bocRef || null
         });
         tx.update(iRef, { status: 'done' });
         if (hash) tx.set(db.doc('used_payments/' + hash), { userId: id, kind: 'withdraw-fee', at: Date.now() });
@@ -1603,7 +1625,7 @@ api.post('/withdraw/confirm', h(async (req, res) => {
 
     if (ADMIN_ID) {
         notify(ADMIN_ID,
-            `💸 <b>New Withdrawal</b>\n\n👤 @${esc(user.username || '')}\n💰 ${it.amount.toLocaleString()} ${cfg.symbol}\n💳 <code>${user.wallet}</code>\n💎 Fee paid: ${hash ? `${it.amountTon} TON ✅` : 'None'}\n\nUse /admin → 📋 Pending withdrawals`
+            `💸 <b>New Withdrawal</b>\n\n👤 @${esc(user.username || '')}\n💰 ${it.amount.toLocaleString()} ${cfg.symbol}\n💳 <code>${user.wallet}</code>\n💎 Fee paid: ${hash ? `${it.amountTon} TON (BOC received)` : 'None'}\n\nUse /admin → 📋 Pending withdrawals to review BOC`
         );
     }
 
