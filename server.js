@@ -163,7 +163,7 @@ const publicConfig = (c) => ({
 });
 
 // ============================================================================
-// 4. STATS (batched every 30s)
+// 4. STATS (batched every 6 hours — low-cost)
 // ============================================================================
 const pend = {};
 const statInc = (k, n = 1) => { pend[k] = (pend[k] || 0) + n; };
@@ -187,7 +187,9 @@ async function flushStats() {
     } catch (e) { log('flushStats:', e.message); }
 }
 
-setInterval(flushStats, 30000);
+// ✅ v3.4: Flush stats every 6 hours instead of 30 seconds (huge cost savings).
+// Admin panel calls flushStats() on open, so displayed numbers stay fresh.
+setInterval(flushStats, 6 * 60 * 60 * 1000);
 
 async function dailyLoad() {
     const d = dayKey();
@@ -601,6 +603,11 @@ const isAdmin = (ctx) => String(ctx.from?.id) === ADMIN_ID;
 const sessions = new Map();
 
 async function buildAdminPanel() {
+    // ✅ v3.4: Flush pending stats so the admin sees fresh numbers on open.
+    // (This keeps the 6-hour background flush cost-efficient while keeping
+    //  the panel always up-to-date.)
+    try { await flushStats(); } catch {}
+
     const c = await getConfig();
     const s = (await db.doc('stats/global').get()).data() || {};
     const t = (k, l) => Markup.button.callback(`${c[k] ? '🟢' : '🔴'} ${l}`, 'a:tg:' + k);
@@ -1278,7 +1285,19 @@ api.post('/register', h(async (req, res) => {
         return u;
     });
 
-    if (created) statInc('users');
+    if (created) {
+        statInc('users');
+
+        // ✅ v3.4: Notify admin about the new registration (single message, no extra reads)
+        if (ADMIN_ID) {
+            notify(ADMIN_ID,
+                `👤 <b>New User Registered</b>\n\n` +
+                `📛 Name: ${esc(tg.first_name || 'User')}\n` +
+                `🔗 Username: @${esc(tg.username || '—')}\n` +
+                `🆔 ID: <code>${tg.id}</code>`
+            );
+        }
+    }
     res.json({ success: true, user: pub(user) });
 }));
 
