@@ -55,6 +55,14 @@ const CONFIG = {
     BOOST_DAYS: 7
 };
 
+// Canonical boost multipliers — must match server DEFAULTS
+const VALID_BOOST_MULTS = [1, 3, 8, 20];
+const CANONICAL_BOOSTS = {
+    bronze: { multiplier: 3,  name: 'SPARK',   icon: '🥉' },
+    silver: { multiplier: 8,  name: 'BLAZE',   icon: '🥈' },
+    gold:   { multiplier: 20, name: 'INFERNO', icon: '🥇' }
+};
+
 // ----------------------------------------------------------------------------
 // 2. STATE
 // ----------------------------------------------------------------------------
@@ -349,6 +357,14 @@ async function boot(silent = false) {
     serverOffset = (res.serverTime || Date.now()) - Date.now();
     tasks = res.tasks || [];
 
+    // ✅ v3.4: Re-apply canonical boosts after server config merge
+    // (server already sends canonical values, but this guards against any mismatch)
+    CONFIG.BOOSTS = {
+        bronze: { price: 3,  multiplier: 3,  name: 'SPARK',   icon: '🥉' },
+        silver: { price: 6,  multiplier: 8,  name: 'BLAZE',   icon: '🥈' },
+        gold:   { price: 15, multiplier: 20, name: 'INFERNO', icon: '🥇' }
+    };
+
     if (res.price) {
         livePriceData = {
             price:     Number(res.price.usd || res.price.price) || 0,
@@ -583,22 +599,25 @@ function getMiningData() {
     };
 }
 
+// ✅ v3.4: Strict whitelist — only canonical multipliers accepted
 function getActiveMultiplier() {
     if (!currentUser) return 1;
-    const exp = currentUser.boostExpiresAt || 0;
-    if (exp && exp < now()) return 1;
-    return currentUser.boostMultiplier || 1;
+    const exp = Number(currentUser.boostExpiresAt) || 0;
+    if (!exp || exp < now()) return 1;
+    const m = Number(currentUser.boostMultiplier) || 1;
+    return VALID_BOOST_MULTS.includes(m) ? m : 1;
 }
 
 // NEW — returns 'bronze'|'silver'|'gold'|null (active boost tier)
+// ✅ v3.4: Strict check — boostMultiplier MUST match canonical tier value
 function getActiveBoostType() {
     if (!currentUser) return null;
-    const exp = currentUser.boostExpiresAt || 0;
-    if (!exp || exp < now()) return null;
+    const exp = Number(currentUser.boostExpiresAt) || 0;
+    if (!exp || exp <= now()) return null;
     const type = currentUser.boostType || null;
-    if (!type) return null;
-    if (!CONFIG.BOOSTS[type]) return null;
-    if ((currentUser.boostMultiplier || 1) <= 1) return null;
+    if (!type || !CANONICAL_BOOSTS[type]) return null;
+    const expectedMult = CANONICAL_BOOSTS[type].multiplier;
+    if (Number(currentUser.boostMultiplier) !== expectedMult) return null;
     return type;
 }
 
@@ -613,15 +632,14 @@ function renderBoostStatusPill() {
         return;
     }
 
-    const cfgBoost = CONFIG.BOOSTS[active];
-    const iconMap = { bronze: '🥉', silver: '🥈', gold: '🥇' };
+    const cfgBoost = CANONICAL_BOOSTS[active];
     const iconEl = $('boostStatusIcon');
     const nameEl = $('boostStatusName');
     const multEl = $('boostStatusMult');
 
-    if (iconEl) iconEl.textContent = iconMap[active] || '⚡';
-    if (nameEl) nameEl.textContent = cfgBoost?.name || active.toUpperCase();
-    if (multEl) multEl.textContent = `${currentUser.boostMultiplier || 1}x`;
+    if (iconEl) iconEl.textContent = cfgBoost.icon || '⚡';
+    if (nameEl) nameEl.textContent = cfgBoost.name;
+    if (multEl) multEl.textContent = `${cfgBoost.multiplier}x`;
 
     pill.dataset.tier = active;
     pill.classList.remove('hidden');
@@ -1365,19 +1383,22 @@ function getBoostDetails(type) {
     const claimsPerDay = Math.floor(24 / 3);
     const days = CONFIG.BOOST_DAYS || 7;
 
-    const perClaim = baseReward * boost.multiplier;
+    // ✅ v3.4: use canonical multiplier (with fallback)
+    const mult = boost.multiplier || boost.mult || 1;
+
+    const perClaim = baseReward * mult;
     const daily = perClaim * claimsPerDay;
     const totalEarned = daily * days;
     const baseEarned = baseReward * claimsPerDay * days;
     const extra = totalEarned - baseEarned;
-    const roiPercent = ((boost.multiplier - 1) * 100).toFixed(0);
+    const roiPercent = ((mult - 1) * 100).toFixed(0);
 
     const price = livePriceData.price || 0;
     const totalUsd = totalEarned * price;
     const extraUsd = extra * price;
 
     return {
-        type, ...boost,
+        type, ...boost, multiplier: mult,
         perClaim, daily, totalEarned, baseEarned, extra,
         roiPercent, totalUsd, extraUsd,
         claimsPerDay, days
@@ -1477,8 +1498,10 @@ async function buyBoostDirect(type) {
     const boost = CONFIG.BOOSTS[type];
     if (!boost) return;
 
+    const mult = boost.multiplier || boost.mult || 1;
+
     const ok = tg?.showConfirm
-        ? await new Promise(r => tg.showConfirm(`Activate ${boost.name} (${boost.multiplier}x) for ${boost.price} TON?`, r))
+        ? await new Promise(r => tg.showConfirm(`Activate ${boost.name} (${mult}x) for ${boost.price} TON?`, r))
         : confirm(`Activate ${boost.name} for ${boost.price} TON?`);
     if (!ok) return;
 
@@ -1531,20 +1554,22 @@ function renderBoosts() {
     const days = CONFIG.BOOST_DAYS || 7;
 
     const cards = Object.entries(CONFIG.BOOSTS).map(([type, b]) => {
-        const perClaim = baseReward * b.multiplier;
+        // ✅ v3.4: canonical multiplier (with fallback)
+        const mult = b.multiplier || b.mult || 1;
+        const perClaim = baseReward * mult;
         const daily = perClaim * claimsPerDay;
         const totalEarned = daily * days;
 
         const tierClass = type === 'silver' ? 'tier-silver' : type === 'gold' ? 'tier-gold' : '';
         const bestBadge = type === 'gold' ? '<div class="best-badge">BEST</div>' : '';
-        const roiPercent = ((b.multiplier - 1) * 100).toFixed(0);
+        const roiPercent = ((mult - 1) * 100).toFixed(0);
 
         return `
             <div class="boost-card ${tierClass}" data-boost="${type}">
                 ${bestBadge}
                 <div class="boost-icon">${b.icon}</div>
                 <div class="boost-name">${b.name}</div>
-                <div class="boost-mult">${b.multiplier}x</div>
+                <div class="boost-mult">${mult}x</div>
                 <div class="boost-mult-label">HASH POWER</div>
                 <div class="boost-price">${b.price} TON</div>
                 <div class="boost-duration">⏱️ ${days} days</div>
