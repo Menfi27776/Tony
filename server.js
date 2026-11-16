@@ -645,7 +645,7 @@ bot.command('set', async (ctx) => {
     const v = parts[2];
 
     const numericKeys = ['miningReward', 'adsReward', 'referralReward', 'minWithdraw', 'feeTon',
-        'minAccountAgeHours', 'maxPendingWd', 'dailyCap', 'adsMinGapSec', 'boostDays'];
+        'minAccountAgeHours', 'maxPendingWd', 'dailyCap', 'adsMinGapSec', 'boostDays', 'cooldownMs'];
     const boolKeys = ['miningEnabled', 'withdrawEnabled', 'maintenance', 'feeAlwaysRequired'];
 
     if (numericKeys.includes(k)) {
