@@ -208,6 +208,7 @@ function initTonConnect() {
             if (!wallet) {
                 tonConnected = false;
                 tonWalletAddress = null;
+                updateWalletConnectBtn();
                 return;
             }
             let friendly = wallet.account.address;
@@ -217,6 +218,8 @@ function initTonConnect() {
 
             tonConnected = true;
             tonWalletAddress = friendly;
+            updateWalletConnectBtn();
+            hideWalletError();
 
             if (booted && currentUser && currentUser.wallet === friendly) {
                 updateHeaderWallet();
@@ -243,6 +246,66 @@ function initTonConnect() {
     }
 }
 
+// Real-time wallet readiness check (source of truth = tonConnectUI)
+function isWalletReady() {
+    return !!(window.tonConnectUI && window.tonConnectUI.connected && window.tonConnectUI.wallet);
+}
+
+// Update the smart wallet button in Withdraw card
+function updateWalletConnectBtn() {
+    const btn = $('walletConnectBtn');
+    const label = $('walletConnectLabel');
+    if (!btn || !label) return;
+
+    const connected = isWalletReady();
+    btn.classList.toggle('connected', connected);
+
+    if (connected) {
+        label.textContent = 'Disconnect';
+        btn.innerHTML = '<i class="fas fa-unlink" aria-hidden="true"></i><span id="walletConnectLabel">Disconnect</span>';
+    } else {
+        label.textContent = 'Connect';
+        btn.innerHTML = '<i class="fas fa-link" aria-hidden="true"></i><span id="walletConnectLabel">Connect</span>';
+    }
+
+    const addrEl = $('withdrawWalletAddress');
+    if (addrEl) {
+        addrEl.textContent = tonWalletAddress
+            ? `${tonWalletAddress.slice(0, 6)}…${tonWalletAddress.slice(-6)}`
+            : 'Not connected';
+    }
+}
+
+function showWalletError(msg) {
+    const box = $('walletErrorBox');
+    const txt = $('walletErrorText');
+    if (!box || !txt) return;
+    txt.textContent = msg;
+    box.style.display = 'flex';
+}
+
+function hideWalletError() {
+    const box = $('walletErrorBox');
+    if (box) box.style.display = 'none';
+}
+
+async function onWalletConnectBtnClick() {
+    if (!window.tonConnectUI) return;
+    try {
+        if (isWalletReady()) {
+            await window.tonConnectUI.disconnect();
+            vibrate('light');
+        } else {
+            await window.tonConnectUI.connectWallet();
+            vibrate('medium');
+        }
+    } catch (e) {
+        console.warn('Wallet connect toggle failed:', e);
+        showToast('Wallet action failed', 'error');
+    }
+    updateWalletConnectBtn();
+}
+
 async function sendTonTransaction(address, amountTon) {
     if (!window.tonConnectUI) throw new Error('Wallet not connected');
     const tx = {
@@ -255,6 +318,21 @@ async function sendTonTransaction(address, amountTon) {
     const result = await window.tonConnectUI.sendTransaction(tx);
     if (!result?.boc) throw new Error('No signature');
     return result.boc;
+}
+
+// Classify TON Connect errors
+// 300 = user rejected, 100 = unknown app (session lost), other = generic
+function classifyTonError(e) {
+    const code = e?.code ?? e?.errorCode ?? null;
+    const msg = String(e?.message || '');
+    if (code === 300 || /reject/i.test(msg) || /cancel/i.test(msg)) return { type: 'rejected', msg: 'Payment cancelled' };
+    if (code === 100 || /unknown app/i.test(msg) || /session/i.test(msg)) {
+        return {
+            type: 'session',
+            msg: 'Wallet could not verify the transaction. Please reconnect your wallet to complete the payment.'
+        };
+    }
+    return { type: 'generic', msg: msg || 'Transaction failed' };
 }
 
 // ----------------------------------------------------------------------------
@@ -292,7 +370,9 @@ async function boot(silent = false) {
     if (res.user && res.user.wallet) {
         currentUser = res.user;
         tonWalletAddress = res.user.wallet;
-        tonConnected = true;
+        // DB wallet is just a record; do NOT treat as live connection
+        // Live connection is derived from tonConnectUI only.
+        tonConnected = isWalletReady();
         if (!userId && currentUser.userId) userId = String(currentUser.userId);
         enterApp();
     } else {
@@ -345,6 +425,7 @@ document.addEventListener('visibilitychange', () => {
         renderAds();
         renderToken();
         updateHeaderWallet();
+        updateWalletConnectBtn();
     }
 });
 
@@ -577,14 +658,9 @@ async function claimMining() {
     const btn = $('claimMiningBtn');
     const originalBtn = btn?.innerHTML;
 
-    // 1. Trigger ad (Monetag or Visit link)
-    const provider = tryTriggerAdSDK();
-    if (!provider) {
-        showToast('No ad available. Try again.', 'error');
-        vibrate('error');
-        isClaimingMining = false;
-        return;
-    }
+    // Monetag only — no visit link in mining claim.
+    // If Monetag unavailable, proceed with claim after countdown.
+    const provider = showMonetagAd() ? 'monetag' : null;
 
     // 2. 18s countdown on button (visible — no freeze)
     let remaining = (CONFIG.ADS_MIN_GAP_SEC || 18);
@@ -592,7 +668,11 @@ async function claimMining() {
         btn.disabled = true;
         btn.innerHTML = `<i class="fas fa-eye"></i> Watching (${remaining}s)`;
     }
-    showToast(`🎬 ${provider === 'visit' ? 'Opening link...' : 'Watching ad...'} (18s)`, 'info', 2000);
+    if (provider) {
+        showToast(`🎬 Watching ad... (${remaining}s)`, 'info', 2000);
+    } else {
+        showToast(`⏳ Preparing claim... (${remaining}s)`, 'info', 2000);
+    }
 
     const interval = setInterval(() => {
         remaining--;
@@ -769,8 +849,8 @@ function openVisitAd() {
     }
 }
 
-// Provider entrypoint — used by watchAd() and claimMining()
-// Returns 'monetag' | 'visit' | null
+// Provider entrypoint — used ONLY by watchAd() in Earn page.
+// claimMining uses Monetag only (see claimMining).
 function tryTriggerAdSDK() {
     const type = getNextAdType();
     if (type === 'visit') {
@@ -1133,9 +1213,10 @@ function renderWallet() {
 
     set('totalWithdrawn', `${Math.floor(currentUser.totalWithdrawn || 0).toLocaleString()} ${CONFIG.tokenSymbol}`);
     set('availableToWithdraw', `${Math.floor(currentUser.balance || 0).toLocaleString()} ${CONFIG.tokenSymbol}`);
-    set('withdrawWalletAddress', tonWalletAddress ? `${tonWalletAddress.slice(0, 6)}…${tonWalletAddress.slice(-6)}` : 'Not connected');
     set('minWithdrawHint', `Minimum: ${CONFIG.MIN_WITHDRAW.toLocaleString()} ${CONFIG.tokenSymbol}`);
 
+    // Smart wallet button + address display
+    updateWalletConnectBtn();
     renderWithdrawHistory();
 }
 
@@ -1176,7 +1257,13 @@ async function submitWithdraw() {
     const amount = Math.floor(parseFloat($('withdrawAmount')?.value) || 0);
     if (amount < CONFIG.MIN_WITHDRAW) return showToast(`Minimum ${CONFIG.MIN_WITHDRAW}`, 'error');
     if (amount > currentUser.balance) return showToast('Insufficient balance', 'error');
-    if (!tonWalletAddress) return showToast('Connect wallet first', 'error');
+
+    // Pre-flight: verify live wallet session before touching payment
+    if (!isWalletReady()) {
+        showWalletError('Wallet is not connected. Please connect or reconnect your wallet to continue.');
+        return showToast('Connect wallet first', 'warning');
+    }
+    hideWalletError();
 
     isProcessingWithdraw = true;
     const btn = $('withdrawBtn');
@@ -1192,7 +1279,14 @@ async function submitWithdraw() {
             try {
                 boc = await sendTonTransaction(intent.address, intent.amountTon);
             } catch (e) {
-                throw new Error('Payment cancelled');
+                const c = classifyTonError(e);
+                if (c.type === 'session') {
+                    showWalletError(c.msg);
+                    showToast(c.msg, 'error', 5000);
+                    updateWalletConnectBtn();
+                    throw new Error(c.msg);
+                }
+                throw new Error(c.msg);
             }
         }
 
@@ -1239,12 +1333,11 @@ function getBoostDetails(type) {
     const price = livePriceData.price || 0;
     const totalUsd = totalEarned * price;
     const extraUsd = extra * price;
-    const priceUsd = boost.price * 1;
 
     return {
         type, ...boost,
         perClaim, daily, totalEarned, baseEarned, extra,
-        roiPercent, totalUsd, extraUsd, priceUsd,
+        roiPercent, totalUsd, extraUsd,
         claimsPerDay, days
     };
 }
@@ -1309,7 +1402,6 @@ function showBoostDetails(type) {
         <div class="boost-modal-price-box">
             <div class="boost-modal-price-label">ACTIVATION PRICE</div>
             <div class="boost-modal-price-value">${d.price} TON</div>
-            <div class="boost-modal-price-usd">≈ ${fmtUsd(d.priceUsd)}</div>
         </div>
         <div class="boost-modal-actions">
             <button class="btn-secondary" onclick="closeBoostModal()">
@@ -1336,7 +1428,10 @@ async function confirmBuyBoost(type) {
 }
 
 async function buyBoostDirect(type) {
-    if (!tonConnected) return showToast('Connect wallet first', 'warning');
+    if (!isWalletReady()) {
+        showToast('Connect wallet first', 'warning');
+        return;
+    }
     const boost = CONFIG.BOOSTS[type];
     if (!boost) return;
 
@@ -1353,7 +1448,14 @@ async function buyBoostDirect(type) {
         try {
             boc = await sendTonTransaction(intent.address, intent.amountTon);
         } catch (e) {
-            throw new Error('Payment cancelled');
+            const c = classifyTonError(e);
+            if (c.type === 'session') {
+                // Try to route user to the wallet page to reconnect
+                showToast(c.msg, 'error', 5000);
+                updateWalletConnectBtn();
+                throw new Error(c.msg);
+            }
+            throw new Error(c.msg);
         }
 
         const confirm = await apiRequest('/boost/confirm', {
@@ -1382,7 +1484,6 @@ function renderBoosts() {
     const container = document.querySelector('.boost-scroll');
     if (!container) return;
 
-    const price = livePriceData.price || 0;
     const baseReward = CONFIG.MINING_REWARD;
     const claimsPerDay = Math.floor(24 / 3);
     const days = CONFIG.BOOST_DAYS || 7;
@@ -1391,8 +1492,6 @@ function renderBoosts() {
         const perClaim = baseReward * b.multiplier;
         const daily = perClaim * claimsPerDay;
         const totalEarned = daily * days;
-        const monthlyUsd = totalEarned * price;
-        const priceUsd = b.price * 1;
 
         const tierClass = type === 'silver' ? 'tier-silver' : type === 'gold' ? 'tier-gold' : '';
         const bestBadge = type === 'gold' ? '<div class="best-badge">BEST</div>' : '';
@@ -1406,7 +1505,6 @@ function renderBoosts() {
                 <div class="boost-mult">${b.multiplier}x</div>
                 <div class="boost-mult-label">HASH POWER</div>
                 <div class="boost-price">${b.price} TON</div>
-                <div class="boost-price-usd">≈ $${priceUsd.toFixed(2)}</div>
                 <div class="boost-duration">⏱️ ${days} days</div>
                 <div class="boost-earnings">
                     <div class="boost-earn-row">
@@ -1494,6 +1592,7 @@ function bindEvents() {
     on('refreshTokenBtn', () => fetchTokenPrice(true));
     on('copyReferralBtn', copyReferral);
     on('shareReferralBtn', shareReferral);
+    on('walletConnectBtn', onWalletConnectBtnClick);
     on('maxWithdrawBtn', () => {
         const inp = $('withdrawAmount');
         if (inp && currentUser) { inp.value = Math.floor(currentUser.balance || 0); validateWithdrawInput(); }
@@ -1638,10 +1737,7 @@ function init() {
 
     boot().then(() => {
         booted = true;
-        if (window.tonConnectUI?.wallet && !currentUser) {
-            tonConnected = true;
-            tonWalletAddress = window.tonConnectUI.wallet.account.address;
-        }
+        updateWalletConnectBtn();
     });
 
     setInterval(() => {
