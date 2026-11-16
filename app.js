@@ -1,10 +1,12 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v3.2
+// GROYPER MINE — EMBER VAULT v3.3
 // Full rewrite — legendary edition with all fixes and new integrations.
 // Ads:     Monetag + Visit Link alternating (10 ads per batch),
 //          Visit Link is double-press: 1st = "Verification failed",
 //          2nd = reward. 30s cooldown between completed ads,
 //          visible countdown, reward only after full wait, no freeze.
+// v3.3:    Removed USD conversion under TON prices (boosts only).
+//          Added wallet reconnect inside boost modal + wallet page.
 // ============================================================================
 'use strict';
 
@@ -154,6 +156,12 @@ function buildReferralLink(uid) {
     return `https://t.me/${CONFIG.botUsername}/${CONFIG.botShortName}?startapp=${uid}`;
 }
 
+// Short wallet display
+function shortWallet(addr) {
+    if (!addr) return '—';
+    return addr.slice(0, 6) + '…' + addr.slice(-6);
+}
+
 // ----------------------------------------------------------------------------
 // 4. API
 // ----------------------------------------------------------------------------
@@ -255,6 +263,26 @@ async function sendTonTransaction(address, amountTon) {
     const result = await window.tonConnectUI.sendTransaction(tx);
     if (!result?.boc) throw new Error('No signature');
     return result.boc;
+}
+
+// Reconnect wallet: disconnect → connect → let onStatusChange re-register
+async function reconnectWallet() {
+    if (!window.tonConnectUI) {
+        return showToast('Wallet not ready', 'error');
+    }
+    try {
+        vibrate('medium');
+        showToast('🔄 Reconnecting wallet...', 'info', 2200);
+        try { await window.tonConnectUI.disconnect(); } catch {}
+        await sleep(450);
+        await window.tonConnectUI.connect();
+        // onStatusChange handles the rest (register + enterApp)
+    } catch (e) {
+        const msg = String(e?.message || '');
+        if (!/cancel/i.test(msg)) {
+            showToast('Reconnect cancelled', 'warning');
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -1262,6 +1290,17 @@ function showBoostDetails(type) {
     }
 
     const fmtUsd = (v) => '$' + v.toFixed(2);
+    const walletLine = tonWalletAddress
+        ? `<div class="boost-modal-wallet-line">
+               <span class="boost-modal-wallet-label">Connected wallet</span>
+               <span class="boost-modal-wallet-addr">${shortWallet(tonWalletAddress)}</span>
+               <button type="button" class="boost-modal-reconnect" onclick="reconnectWallet()" title="Reconnect wallet" aria-label="Reconnect wallet">
+                   <i class="fas fa-rotate-right" aria-hidden="true"></i>
+               </button>
+           </div>`
+        : `<div class="boost-modal-wallet-line">
+               <span class="boost-modal-wallet-label">Wallet not connected</span>
+           </div>`;
 
     content.innerHTML = `
         <div class="boost-modal-header">
@@ -1309,7 +1348,7 @@ function showBoostDetails(type) {
         <div class="boost-modal-price-box">
             <div class="boost-modal-price-label">ACTIVATION PRICE</div>
             <div class="boost-modal-price-value">${d.price} TON</div>
-            <div class="boost-modal-price-usd">≈ ${fmtUsd(d.priceUsd)}</div>
+            ${walletLine}
         </div>
         <div class="boost-modal-actions">
             <button class="btn-secondary" onclick="closeBoostModal()">
@@ -1406,7 +1445,6 @@ function renderBoosts() {
                 <div class="boost-mult">${b.multiplier}x</div>
                 <div class="boost-mult-label">HASH POWER</div>
                 <div class="boost-price">${b.price} TON</div>
-                <div class="boost-price-usd">≈ $${priceUsd.toFixed(2)}</div>
                 <div class="boost-duration">⏱️ ${days} days</div>
                 <div class="boost-earnings">
                     <div class="boost-earn-row">
