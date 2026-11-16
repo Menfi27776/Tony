@@ -7,8 +7,8 @@
     <meta name="format-detection" content="telephone=no">
     <title>Groyper Mine · Ember Vault</title>
 
-    <!-- Telegram WebApp SDK -->
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Telegram WebApp SDK — with ?56 (required by Adexium) -->
+    <script src="https://telegram.org/js/telegram-web-app.js?56"></script>
 
     <!-- TON Connect (PINNED VERSION — NOT @latest) -->
     <script src="https://unpkg.com/@tonconnect/ui@2.0.9/dist/tonconnect-ui.min.js"></script>
@@ -19,77 +19,87 @@
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
 
     <!-- Adexium SDK — Official CDN -->
-    <script type="text/javascript" src="https://cdn.adexium.tech/assets/js/adexium-widget.min.js"></script>
+    <script type="text/javascript" src="https://cdn.tgads.space/assets/js/adexium-widget.min.js"></script>
 
     <script>
-    (async function initAdexium() {
-        // Wait up to 10s for SDK to load
-        for (let i = 0; i < 50; i++) {
-            if (typeof window.AdexiumWidget !== 'undefined') break;
-            await new Promise(r => setTimeout(r, 200));
-        }
+    document.addEventListener('DOMContentLoaded', () => {
+        const initAdexium = () => {
+            if (typeof window.AdexiumWidget === 'undefined') {
+                console.warn('⏳ Waiting for AdexiumWidget...');
+                setTimeout(initAdexium, 200);
+                return;
+            }
 
-        if (typeof window.AdexiumWidget === 'undefined') {
-            console.error('❌ AdexiumWidget SDK not loaded after 10s');
-            return;
-        }
+            try {
+                // ✅ adexiumWidget (not adexiumAds)
+                window.adexiumWidget = new window.AdexiumWidget({
+                    wid: 'd9e2de77-513f-469f-9a05-eb03d0069f8e',
+                    adFormat: 'interstitial',
+                    firstAdImpressionIntervalInSeconds: 999999,  // ← no auto-show
+                    adImpressionIntervalInSeconds: 999999        // ← no auto-show
+                });
 
-        try {
-            // Initialize widget — NO autoMode (manual only)
-            window.adexiumAds = new window.AdexiumWidget({
-                wid: 'd9e2de77-513f-469f-9a05-eb03d0069f8e',
-                adFormat: 'interstitial'
-            });
+                // ✅ autoMode to activate SDK (without auto-show due to intervals)
+                window.adexiumWidget.autoMode();
 
-            // Global state for tracking ad lifecycle
-            window.__adexiumAdState = 'idle';
-            window.__adexiumAd = null;
+                // Global state for tracking ad lifecycle
+                window.__adexiumAdState = 'idle';
+                window.__adexiumAd = null;
 
-            // Subscribe to all events ONCE
-            window.adexiumAds.on('adReceived', (ad) => {
-                console.log('📺 Adexium: ad received', ad);
-                window.__adexiumAdState = 'received';
-                window.__adexiumAd = ad;
+                // ✅ adReceived — request display only (don't set displayed)
+                window.adexiumWidget.on('adReceived', (ad) => {
+                    console.log('📺 Adexium: ad received');
+                    window.__adexiumAdState = 'received';
+                    window.__adexiumAd = ad;
 
-                try {
-                    window.adexiumAds.displayAd(ad);
+                    try {
+                        window.adexiumWidget.displayAd(ad);
+                    } catch (e) {
+                        console.warn('displayAd failed:', e);
+                        window.__adexiumAdState = 'error';
+                    }
+                });
+
+                // ✅ adDisplayed — ad appeared on screen
+                window.adexiumWidget.on('adDisplayed', () => {
+                    console.log('✅ Adexium: ad displayed');
                     window.__adexiumAdState = 'displayed';
-                } catch (e) {
-                    console.warn('displayAd failed:', e);
-                    window.__adexiumAdState = 'error';
-                }
-            });
+                });
 
-            window.adexiumAds.on('noAdFound', () => {
-                console.warn('⚠️ Adexium: no ad found');
-                window.__adexiumAdState = 'noAd';
-            });
+                // ✅ adPlaybackCompleted — user fully watched (reward only here)
+                window.adexiumWidget.on('adPlaybackCompleted', () => {
+                    console.log('✅ Adexium: playback completed');
+                    window.__adexiumAdState = 'completed';
+                });
 
-            window.adexiumAds.on('adDisplayed', () => {
-                console.log('✅ Adexium: ad displayed');
-                window.__adexiumAdState = 'displayed';
-            });
+                // ⚠️ adClosed — closed before completion → treat as failure
+                window.adexiumWidget.on('adClosed', () => {
+                    if (window.__adexiumAdState !== 'completed') {
+                        console.warn('⚠️ Adexium: closed before completion');
+                        window.__adexiumAdState = 'closed';
+                    }
+                });
 
-            window.adexiumAds.on('adClosed', () => {
-                console.log('✅ Adexium: ad closed');
-                window.__adexiumAdState = 'closed';
-            });
+                // ❌ noAdFound — no inventory
+                window.adexiumWidget.on('noAdFound', () => {
+                    console.warn('⚠️ Adexium: no ad found');
+                    window.__adexiumAdState = 'noAd';
+                });
 
-            window.adexiumAds.on('adPlaybackCompleted', () => {
-                console.log('✅ Adexium: ad playback completed');
-                window.__adexiumAdState = 'completed';
-            });
+                // ✅ adRedirected — user clicked ad
+                window.adexiumWidget.on('adRedirected', () => {
+                    console.log('✅ Adexium: ad clicked');
+                    window.__adexiumAdState = 'redirected';
+                });
 
-            window.adexiumAds.on('adRedirected', () => {
-                console.log('✅ Adexium: ad clicked');
-                window.__adexiumAdState = 'redirected';
-            });
+                console.log('✅ Adexium initialized (no auto-show, playback tracking)');
+            } catch (e) {
+                console.error('❌ Adexium init failed:', e);
+            }
+        };
 
-            console.log('✅ Adexium initialized (manual mode)');
-        } catch (e) {
-            console.error('❌ Adexium init failed:', e);
-        }
-    })();
+        initAdexium();
+    });
     </script>
 
     <!-- ==================== FONTS ==================== -->
