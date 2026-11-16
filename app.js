@@ -622,17 +622,36 @@ function getActiveBoostType() {
 }
 
 // NEW — update boost status pill (called from renderAll only)
+// ✅ v3.4: Direct guard — checks boostMultiplier BEFORE relying on getActiveBoostType()
 function renderBoostStatusPill() {
     const pill = $('boostStatusPill');
     if (!pill) return;
 
-    const active = getActiveBoostType();
-    if (!active) {
+    // Direct guard: no user → hide
+    if (!currentUser) {
         pill.classList.add('hidden');
         return;
     }
 
-    const cfgBoost = CANONICAL_BOOSTS[active];
+    // Direct guard: read multiplier first — if 1, hide immediately
+    const exp = Number(currentUser.boostExpiresAt) || 0;
+    const mult = Number(currentUser.boostMultiplier) || 1;
+    const type = currentUser.boostType || null;
+
+    if (!exp || exp <= now() || mult <= 1 || !type || !CANONICAL_BOOSTS[type]) {
+        pill.classList.add('hidden');
+        return;
+    }
+
+    // Direct guard: multiplier must match canonical tier (e.g. bronze=3)
+    const expected = CANONICAL_BOOSTS[type].multiplier;
+    if (mult !== expected) {
+        pill.classList.add('hidden');
+        return;
+    }
+
+    // Show pill with canonical values
+    const cfgBoost = CANONICAL_BOOSTS[type];
     const iconEl = $('boostStatusIcon');
     const nameEl = $('boostStatusName');
     const multEl = $('boostStatusMult');
@@ -641,7 +660,7 @@ function renderBoostStatusPill() {
     if (nameEl) nameEl.textContent = cfgBoost.name;
     if (multEl) multEl.textContent = `${cfgBoost.multiplier}x`;
 
-    pill.dataset.tier = active;
+    pill.dataset.tier = type;
     pill.classList.remove('hidden');
 }
 
