@@ -622,45 +622,33 @@ function getActiveBoostType() {
 }
 
 // NEW — update boost status pill (called from renderAll only)
-// ✅ v3.4: Direct guard — checks boostMultiplier BEFORE relying on getActiveBoostType()
+// ✅ v3.4: Always shows — FREE 1x when no active boost, tier when active
 function renderBoostStatusPill() {
     const pill = $('boostStatusPill');
     if (!pill) return;
 
-    // Direct guard: no user → hide
-    if (!currentUser) {
-        pill.classList.add('hidden');
-        return;
-    }
-
-    // Direct guard: read multiplier first — if 1, hide immediately
-    const exp = Number(currentUser.boostExpiresAt) || 0;
-    const mult = Number(currentUser.boostMultiplier) || 1;
-    const type = currentUser.boostType || null;
-
-    if (!exp || exp <= now() || mult <= 1 || !type || !CANONICAL_BOOSTS[type]) {
-        pill.classList.add('hidden');
-        return;
-    }
-
-    // Direct guard: multiplier must match canonical tier (e.g. bronze=3)
-    const expected = CANONICAL_BOOSTS[type].multiplier;
-    if (mult !== expected) {
-        pill.classList.add('hidden');
-        return;
-    }
-
-    // Show pill with canonical values
-    const cfgBoost = CANONICAL_BOOSTS[type];
     const iconEl = $('boostStatusIcon');
     const nameEl = $('boostStatusName');
     const multEl = $('boostStatusMult');
 
-    if (iconEl) iconEl.textContent = cfgBoost.icon || '⚡';
-    if (nameEl) nameEl.textContent = cfgBoost.name;
-    if (multEl) multEl.textContent = `${cfgBoost.multiplier}x`;
+    // Determine active tier
+    const activeTier = getActiveBoostType();
 
-    pill.dataset.tier = type;
+    if (activeTier) {
+        // Active boost — show tier
+        const cfgBoost = CANONICAL_BOOSTS[activeTier];
+        if (iconEl) iconEl.textContent = cfgBoost.icon || '⚡';
+        if (nameEl) nameEl.textContent = cfgBoost.name;
+        if (multEl) multEl.textContent = `${cfgBoost.multiplier}x`;
+        pill.dataset.tier = activeTier;
+    } else {
+        // No active boost — show FREE 1x
+        if (iconEl) iconEl.textContent = '⚡';
+        if (nameEl) nameEl.textContent = 'FREE';
+        if (multEl) multEl.textContent = '1x';
+        pill.dataset.tier = 'free';
+    }
+
     pill.classList.remove('hidden');
 }
 
