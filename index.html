@@ -93,6 +93,13 @@
 
             <!-- Mining Hero -->
             <div class="card mining-card">
+                <!-- Active Boost Status Pill (reuses BOOST styling) -->
+                <div id="boostStatusPill" class="boost-shortcut hidden" style="right:110px;cursor:default;pointer-events:none;">
+                    <span id="boostStatusIcon">🥉</span>
+                    <span id="boostStatusName" class="boost-shortcut-text">SPARK</span>
+                    <span id="boostStatusMult" class="boost-shortcut-mult">3x</span>
+                </div>
+
                 <!-- Boost Shortcut Button -->
                 <button id="boostShortcutBtn" class="boost-shortcut" aria-label="View boost plans">
                     <i class="fas fa-bolt" aria-hidden="true"></i>
