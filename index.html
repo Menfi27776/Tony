@@ -7,7 +7,7 @@
     <meta name="format-detection" content="telephone=no">
     <title>Groyper Mine · Ember Vault</title>
 
-    <!-- Telegram WebApp SDK — with ?56 (required by Adexium) -->
+    <!-- Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js?56"></script>
 
     <!-- TON Connect (PINNED VERSION — NOT @latest) -->
@@ -17,90 +17,6 @@
 
     <!-- Monetag -->
     <script src='//libtl.com/sdk.js' data-zone='12265394' data-sdk='show_12265394'></script>
-
-    <!-- Adexium SDK — Official CDN -->
-    <script type="text/javascript" src="https://cdn.tgads.space/assets/js/adexium-widget.min.js"></script>
-
-    <script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const initAdexium = () => {
-            if (typeof window.AdexiumWidget === 'undefined') {
-                console.warn('⏳ Waiting for AdexiumWidget...');
-                setTimeout(initAdexium, 200);
-                return;
-            }
-
-            try {
-                // ✅ adexiumWidget (exactly as in official docs)
-                window.adexiumWidget = new window.AdexiumWidget({
-                    wid: 'd9e2de77-513f-469f-9a05-eb03d0069f8e',
-                    adFormat: 'interstitial',
-                    firstAdImpressionIntervalInSeconds: 999999,  // ← prevent auto-show
-                    adImpressionIntervalInSeconds: 999999        // ← prevent auto-show
-                });
-
-                // ✅ autoMode() — required to activate SDK (no auto-show due to intervals)
-                window.adexiumWidget.autoMode();
-
-                // Global state for tracking ad lifecycle
-                window.__adexiumAdState = 'idle';
-                window.__adexiumAd = null;
-
-                // ✅ adReceived — request display only (don't set displayed here)
-                window.adexiumWidget.on('adReceived', (ad) => {
-                    console.log('📺 Adexium: ad received');
-                    window.__adexiumAdState = 'received';
-                    window.__adexiumAd = ad;
-
-                    try {
-                        window.adexiumWidget.displayAd(ad);
-                    } catch (e) {
-                        console.warn('displayAd failed:', e);
-                        window.__adexiumAdState = 'error';
-                    }
-                });
-
-                // ✅ adDisplayed — ad appeared on screen
-                window.adexiumWidget.on('adDisplayed', () => {
-                    console.log('✅ Adexium: ad displayed');
-                    window.__adexiumAdState = 'displayed';
-                });
-
-                // ✅ adPlaybackCompleted — user fully watched (reward only here)
-                window.adexiumWidget.on('adPlaybackCompleted', () => {
-                    console.log('✅ Adexium: playback completed');
-                    window.__adexiumAdState = 'completed';
-                });
-
-                // ⚠️ adClosed — closed before completion → treat as failure
-                window.adexiumWidget.on('adClosed', () => {
-                    if (window.__adexiumAdState !== 'completed') {
-                        console.warn('⚠️ Adexium: closed before completion');
-                        window.__adexiumAdState = 'closed';
-                    }
-                });
-
-                // ❌ noAdFound — no inventory
-                window.adexiumWidget.on('noAdFound', () => {
-                    console.warn('⚠️ Adexium: no ad found');
-                    window.__adexiumAdState = 'noAd';
-                });
-
-                // ✅ adRedirected — user clicked ad
-                window.adexiumWidget.on('adRedirected', () => {
-                    console.log('✅ Adexium: ad clicked');
-                    window.__adexiumAdState = 'redirected';
-                });
-
-                console.log('✅ Adexium initialized (manual mode, no auto-show)');
-            } catch (e) {
-                console.error('❌ Adexium init failed:', e);
-            }
-        };
-
-        initAdexium();
-    });
-    </script>
 
     <!-- ==================== FONTS ==================== -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
