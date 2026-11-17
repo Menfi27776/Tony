@@ -84,6 +84,7 @@ let lastAdTime = 0;
 let booted = false;
 let serverOffset = 0;
 let lastPriceFetch = 0;
+let activeVideoTaskId = null; // ✅ v3.5: track currently open video code task
 
 const now = () => Date.now() + serverOffset;
 const $ = (id) => document.getElementById(id);
@@ -1083,14 +1084,18 @@ function renderTasks() {
     const done = new Set(currentUser?.completedTasks || []);
     c.innerHTML = tasks.map(t => {
         const d = done.has(t.id);
+        const isVideo = t.type === 'video_code';
+        // ✅ v3.5: Video code tasks show WATCH button and open modal
+        const btnLabel = d ? '✓ DONE' : (isVideo ? 'WATCH' : 'START');
+        const btnAct = d ? 'done' : (isVideo ? 'video' : 'start');
         return `<div class="task-item ${d ? 'done' : ''}" data-task-id="${t.id}">
-            <div class="task-icon"><i class="${t.iconClass || 'fas fa-link'}"></i></div>
+            <div class="task-icon"><i class="${t.iconClass || (isVideo ? 'fas fa-video' : 'fas fa-link')}"></i></div>
             <div class="task-info">
                 <div class="task-name">${t.name}</div>
                 <div class="task-reward">+${t.reward} ${CONFIG.tokenSymbol}</div>
             </div>
-            <button class="task-btn ${d ? 'completed' : ''}" data-act="start" ${d ? 'disabled' : ''}>
-                ${d ? '✓ DONE' : 'START'}
+            <button class="task-btn ${d ? 'completed' : ''}" data-act="${btnAct}" ${d ? 'disabled' : ''}>
+                ${btnLabel}
             </button>
         </div>`;
     }).join('');
@@ -1099,6 +1104,12 @@ function renderTasks() {
 async function taskAction(taskId, action) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
+
+    // ✅ v3.5: Video code task — open modal instead of opening link directly
+    if (action === 'video') {
+        openVideoCodeModal(task);
+        return;
+    }
 
     if (action === 'start') {
         if (/^https:\/\/t\.me\//.test(task.url)) tg?.openTelegramLink ? tg.openTelegramLink(task.url) : window.open(task.url, '_blank');
@@ -1122,6 +1133,157 @@ async function taskAction(taskId, action) {
     } else {
         showToast(res.error || 'Verification failed', 'error');
         vibrate('error');
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 11b. VIDEO CODE TASK — Modal + code submission  ✅ v3.5
+// ----------------------------------------------------------------------------
+function openVideoCodeModal(task) {
+    if (!task) return;
+
+    const modal = $('videoCodeModal');
+    const content = $('videoCodeDetails');
+    if (!modal || !content) {
+        // Fallback: open video directly if modal missing
+        if (task.url) {
+            if (tg?.openLink) tg.openLink(task.url);
+            else window.open(task.url, '_blank');
+        }
+        return;
+    }
+
+    activeVideoTaskId = task.id;
+
+    content.innerHTML = `
+        <div class="video-code-header">
+            <div class="video-code-icon"><i class="fas fa-video" aria-hidden="true"></i></div>
+            <div class="video-code-title">
+                <h2>${task.name}</h2>
+                <span class="video-code-reward">+${task.reward} ${CONFIG.tokenSymbol}</span>
+            </div>
+        </div>
+        <p class="video-code-instructions">
+            Watch the video, collect the code shown inside it, then enter it below to claim your reward.
+        </p>
+        <button type="button" id="watchVideoBtn" class="btn-secondary video-code-watch-btn">
+            <i class="fas fa-play" aria-hidden="true"></i>
+            <span>Watch Video</span>
+        </button>
+        <div class="video-code-input-group">
+            <input
+                type="text"
+                id="videoCodeInput"
+                class="video-code-input"
+                placeholder="Enter code"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false">
+        </div>
+        <div id="videoCodeError" class="video-code-error" style="display:none;"></div>
+        <button type="button" id="submitVideoCodeBtn" class="btn-primary video-code-submit-btn">
+            <i class="fas fa-check" aria-hidden="true"></i>
+            <span>SUBMIT CODE</span>
+        </button>
+    `;
+
+    // Bind watch video button
+    const watchBtn = $('watchVideoBtn');
+    if (watchBtn) {
+        watchBtn.onclick = () => {
+            if (!task.url) return showToast('Video link missing', 'error');
+            try {
+                if (tg?.openLink) tg.openLink(task.url, { try_instant_view: false });
+                else window.open(task.url, '_blank');
+                vibrate('light');
+            } catch {
+                window.open(task.url, '_blank');
+            }
+        };
+    }
+
+    // Bind submit button
+    const submitBtn = $('submitVideoCodeBtn');
+    if (submitBtn) {
+        submitBtn.onclick = () => submitVideoCode(task.id);
+    }
+
+    // Enter key submits
+    const input = $('videoCodeInput');
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submitVideoCode(task.id); }
+        });
+        setTimeout(() => { try { input.focus(); } catch {} }, 200);
+    }
+
+    modal.classList.remove('hidden');
+    vibrate('medium');
+}
+
+function closeVideoCodeModal() {
+    const modal = $('videoCodeModal');
+    if (modal) modal.classList.add('hidden');
+    activeVideoTaskId = null;
+    const input = $('videoCodeInput');
+    if (input) input.value = '';
+    const err = $('videoCodeError');
+    if (err) { err.style.display = 'none'; err.textContent = ''; }
+}
+
+async function submitVideoCode(taskId) {
+    if (!taskId) return;
+    const input = $('videoCodeInput');
+    const errEl = $('videoCodeError');
+    const submitBtn = $('submitVideoCodeBtn');
+
+    const code = (input?.value || '').trim();
+    if (!code) {
+        if (errEl) { errEl.textContent = 'Please enter the code'; errEl.style.display = 'block'; }
+        vibrate('error');
+        return;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> <span>VERIFYING...</span>';
+    }
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+    try {
+        const res = await apiRequest('/tasks/verify-code', {
+            method: 'POST',
+            body: { taskId, code }
+        });
+
+        if (res.success) {
+            currentUser = res.user;
+            vibrate('success');
+            showToast(`+${res.reward} ${CONFIG.tokenSymbol}`, 'success');
+            confetti();
+            closeVideoCodeModal();
+            renderAll();
+        } else {
+            if (errEl) {
+                errEl.textContent = res.error || 'Invalid code. Please check and try again.';
+                errEl.style.display = 'block';
+            }
+            vibrate('error');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i> <span>SUBMIT CODE</span>';
+            }
+        }
+    } catch (e) {
+        if (errEl) {
+            errEl.textContent = e.message || 'Verification failed';
+            errEl.style.display = 'block';
+        }
+        vibrate('error');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i> <span>SUBMIT CODE</span>';
+        }
     }
 }
 
@@ -1725,6 +1887,11 @@ function bindEvents() {
         // Close boost modal on overlay click
         if (e.target.id === 'boostModal') {
             closeBoostModal();
+        }
+
+        // ✅ v3.5: Close video code modal on overlay click
+        if (e.target.id === 'videoCodeModal') {
+            closeVideoCodeModal();
         }
     });
 }
