@@ -6,6 +6,7 @@
          compact ⚡×20 boost shortcut with periodic shake,
          rising bubble particles inside mining card.
    v3.4: Boost status pill (active tier display, left corner of mining card).
+   v3.5: Video code task modal styles.
    ========================================================================== */
 
 :root{
@@ -2444,4 +2445,109 @@ input:focus-visible,
   .bottom-nav,.toast,#embersCanvas,.boost-shortcut,.boost-modal{display:none!important}
   .card{box-shadow:none;border:1px solid #ccc}
   body{background:#fff;color:#000}
+}
+
+/* ============================================================
+   ✅ v3.5 — VIDEO CODE TASK MODAL
+   Additive styles only; reuses .modal-overlay / .modal-content.
+   ============================================================ */
+.video-code-header{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  margin-bottom:20px;
+  padding-bottom:16px;
+  border-bottom:1px solid var(--line);
+}
+.video-code-icon{
+  width:56px;
+  height:56px;
+  border-radius:50%;
+  display:grid;
+  place-items:center;
+  font-size:24px;
+  color:var(--fire-2);
+  background:var(--grad-fire-soft);
+  border:1px solid rgba(57,255,136,.32);
+  flex-shrink:0;
+  filter:drop-shadow(0 0 16px rgba(57,255,136,.5));
+}
+.video-code-title{flex:1;min-width:0}
+.video-code-title h2{
+  font-family:var(--f-num);
+  font-size:20px;
+  font-weight:700;
+  line-height:1.2;
+  margin-bottom:4px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.video-code-reward{
+  display:inline-block;
+  font-family:var(--f-num);
+  font-size:12.5px;
+  font-weight:700;
+  color:var(--gold-bright);
+  text-shadow:0 0 12px rgba(77,255,148,.6);
+  letter-spacing:.02em;
+}
+.video-code-instructions{
+  font-size:13px;
+  line-height:1.65;
+  color:var(--tx-2);
+  margin-bottom:16px;
+  padding:12px 14px;
+  border-radius:var(--r-sm);
+  background:rgba(0,152,234,.08);
+  border:1px solid rgba(0,152,234,.22);
+}
+.video-code-watch-btn{
+  margin-bottom:16px;
+  min-height:52px;
+}
+.video-code-input-group{
+  margin-bottom:12px;
+}
+.video-code-input{
+  width:100%;
+  padding:16px 18px;
+  border-radius:var(--r-md);
+  border:1.5px solid var(--line-2);
+  background:rgba(255,255,255,.05);
+  color:var(--tx);
+  font-family:var(--f-num);
+  font-size:20px;
+  font-weight:700;
+  letter-spacing:.1em;
+  text-align:center;
+  outline:none;
+  transition:border-color .25s,box-shadow .25s;
+  -webkit-appearance:none;
+  appearance:none;
+}
+.video-code-input::placeholder{
+  color:var(--tx-3);
+  font-weight:500;
+  letter-spacing:.02em;
+  font-size:14px;
+}
+.video-code-input:focus{
+  border-color:var(--fire-2);
+  box-shadow:0 0 0 4px rgba(57,255,136,.18);
+}
+.video-code-error{
+  font-size:12.5px;
+  font-weight:600;
+  color:var(--bad);
+  background:var(--bad-soft);
+  border:1px solid rgba(255,71,87,.3);
+  border-radius:var(--r-sm);
+  padding:10px 14px;
+  margin-bottom:12px;
+  line-height:1.5;
+  text-align:center;
+}
+.video-code-submit-btn{
+  margin-top:4px;
 }
