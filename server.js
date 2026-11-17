@@ -253,6 +253,15 @@ const saveTasks = async (list) => {
     bust('tasks');
 };
 
+// ✅ v3.5: Remove sensitive fields (code) before sending tasks to frontend
+const sanitizeTasks = (list) => (list || []).map(t => {
+    const out = { ...t };
+    if (out.type === 'video_code') {
+        delete out.code; // never expose the expected code
+    }
+    return out;
+});
+
 // ============================================================================
 // 6. PRICE (cached 60s, source: DexScreener → CoinGecko fallback)
 // ============================================================================
@@ -931,9 +940,10 @@ bot.action(/^a:(\w+)(?::(.+))?$/, async (ctx) => {
         }
         if (act === 'tasks') {
             const tasks = await getTasks();
-            const txt = '📝 <b>Tasks</b>\n\n' + tasks.map((t, i) =>
-                `${i + 1}. <b>${esc(t.name)}</b> (+${t.reward}) [${t.verify}]\n${esc(t.url)}`
-            ).join('\n\n');
+            const txt = '📝 <b>Tasks</b>\n\n' + tasks.map((t, i) => {
+                const typeLabel = t.type === 'video_code' ? '🎬 VIDEO' : `[${t.verify}]`;
+                return `${i + 1}. <b>${esc(t.name)}</b> (+${t.reward}) ${typeLabel}\n${esc(t.url)}`;
+            }).join('\n\n');
             return ctx.replyWithHTML(txt, Markup.inlineKeyboard([
                 [Markup.button.callback('➕ Add', 'a:ta')],
                 ...tasks.map(t => [Markup.button.callback('🗑 ' + t.name.slice(0, 30), 'a:td:' + t.id)])
@@ -955,6 +965,13 @@ bot.action(/^a:(\w+)(?::(.+))?$/, async (ctx) => {
                 s.verify = 'chat';
                 s.step = 'tchat';
                 return ctx.reply('Send the channel/group @username:');
+            }
+            if (arg === 'video') {
+                // ✅ v3.5: Video code task flow
+                s.type = 'video_code';
+                s.verify = 'code';
+                s.step = 'tvideo';
+                return ctx.reply('Send the video URL (YouTube / TikTok / any https:// link):');
             }
             s.verify = 'delay';
             return finishTask(ctx, s);
@@ -990,7 +1007,7 @@ bot.action(/^a:(\w+)(?::(.+))?$/, async (ctx) => {
 
 async function finishTask(ctx, s) {
     const tasks = await getTasks();
-    tasks.push({
+    const newTask = {
         id: 't' + Date.now(),
         name: s.name,
         url: s.url,
@@ -999,10 +1016,19 @@ async function finishTask(ctx, s) {
         chat: s.chat || null,
         delaySec: 20,
         iconClass: /t\.me/.test(s.url) ? 'fab fa-telegram' : /x\.com|twitter/.test(s.url) ? 'fab fa-twitter' : 'fas fa-link'
-    });
+    };
+
+    // ✅ v3.5: Video code task — add type + code + video icon
+    if (s.type === 'video_code') {
+        newTask.type = 'video_code';
+        newTask.code = s.code;
+        newTask.iconClass = 'fas fa-video';
+    }
+
+    tasks.push(newTask);
     await saveTasks(tasks);
     sessions.delete(ADMIN_ID);
-    ctx.reply(`✅ Task "${s.name}" added (${s.verify}).`);
+    ctx.reply(`✅ Task "${s.name}" added (${newTask.type || newTask.verify}).`);
 }
 
 // ---- Broadcast status formatter ----
@@ -1153,14 +1179,30 @@ bot.on('text', async (ctx) => {
         const n = parseInt(t);
         if (!(n > 0)) return ctx.reply('❌ Invalid number');
         s.reward = n; s.step = 'tverify';
+        // ✅ v3.5: Added third option — Video Code
         return ctx.reply('Verification type?', Markup.inlineKeyboard([
             [Markup.button.callback('Channel/Group member', 'a:tv:chat')],
-            [Markup.button.callback('Link (time delay)', 'a:tv:delay')]
+            [Markup.button.callback('Link (time delay)', 'a:tv:delay')],
+            [Markup.button.callback('🎬 Video Code (code inside video)', 'a:tv:video')]
         ]));
     }
     if (s.step === 'tchat') {
         if (!/^@\w{4,}$/.test(t)) return ctx.reply('❌ Send like @mychannel');
         s.chat = t;
+        return finishTask(ctx, s);
+    }
+    // ✅ v3.5: Video code flow — video URL then code
+    if (s.step === 'tvideo') {
+        if (!/^https:\/\//.test(t)) return ctx.reply('❌ Must start with https://');
+        s.url = t;
+        s.step = 'tcode';
+        return ctx.reply('Send the secret code (shown inside the video). This code will be required from the user:');
+    }
+    if (s.step === 'tcode') {
+        const code = t.trim();
+        if (code.length < 3) return ctx.reply('❌ Code must be at least 3 characters');
+        if (code.length > 100) return ctx.reply('❌ Code too long (max 100 chars)');
+        s.code = code;
         return finishTask(ctx, s);
     }
     if (s.step === 'bc') {
@@ -1232,7 +1274,7 @@ api.get('/init', h(async (req, res) => {
     res.json({
         success: true,
         user: userOut,
-        tasks,
+        tasks: sanitizeTasks(tasks), // ✅ v3.5: never expose video_code `code`
         config: publicConfig(cfg),
         price,
         serverTime: Date.now(),
@@ -1462,6 +1504,7 @@ api.post('/tasks/verify', h(async (req, res) => {
     const taskId = String(req.body?.taskId || '');
     const task = (await getTasks()).find(t => t.id === taskId);
     if (!task) throw new AppErr('Task not found');
+    if (task.type === 'video_code') throw new AppErr('Use /tasks/verify-code for this task');
 
     const pre = await userRef(id).get();
     if (pre.exists && (pre.data().completedTasks || []).includes(taskId)) {
@@ -1509,6 +1552,56 @@ api.post('/tasks/verify', h(async (req, res) => {
     }
 
     // REWARD — only after full verification
+    const out = await db.runTransaction(async (tx) => {
+        const ref = userRef(id);
+        const s = await tx.get(ref);
+        if (!s.exists) throw new AppErr('User not found');
+        const u = s.data();
+        if (u.banned) throw new AppErr('Account banned', 403);
+        if ((u.completedTasks || []).includes(taskId)) throw new AppErr('Already completed');
+        capCheck(cfg, task.reward);
+
+        tx.update(ref, {
+            completedTasks: arrayUnion(taskId),
+            balance: inc(task.reward),
+            totalEarned: inc(task.reward)
+        });
+        return {
+            ...u,
+            completedTasks: [...(u.completedTasks || []), taskId],
+            balance: (u.balance || 0) + task.reward,
+            totalEarned: (u.totalEarned || 0) + task.reward
+        };
+    });
+
+    capCommit(task.reward);
+    res.json({ success: true, reward: task.reward, user: pub(out) });
+}));
+
+// ✅ v3.5: Video code task verification
+api.post('/tasks/verify-code', h(async (req, res) => {
+    const cfg = await getConfig();
+    await dailyLoad();
+    const id = req.tg.id;
+    const taskId = String(req.body?.taskId || '');
+    const userCode = String(req.body?.code || '').trim();
+
+    const task = (await getTasks()).find(t => t.id === taskId);
+    if (!task) throw new AppErr('Task not found');
+    if (task.type !== 'video_code') throw new AppErr('This task is not a video code task');
+    if (!task.code) throw new AppErr('Task code is not configured');
+
+    if (!userCode) throw new AppErr('Please enter the code');
+
+    // Case-insensitive, whitespace-tolerant comparison
+    const normalize = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, '');
+    const expected = normalize(task.code);
+    const provided = normalize(userCode);
+
+    if (provided !== expected) {
+        throw new AppErr('Invalid code. Watch the video again and check the code.');
+    }
+
     const out = await db.runTransaction(async (tx) => {
         const ref = userRef(id);
         const s = await tx.get(ref);
