@@ -93,7 +93,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ----------------------------------------------------------------------------
 // 3. UTILITIES
 // ----------------------------------------------------------------------------
-function showToast(msg, type = 'info', dur = 3000) {
+function showToast(msg, type = 'info', dur = 6000) {
     const t = $('toast');
     const m = $('toastMessage');
     if (!t || !m) { try { console.log('[toast]', msg); } catch {} return; }
