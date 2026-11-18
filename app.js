@@ -1,10 +1,15 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v3.2
+// GROYPER MINE — EMBER VAULT v3.6
 // Full rewrite — legendary edition with all fixes and new integrations.
 // Ads:     Monetag + Visit Link alternating (10 ads per batch),
 //          Visit Link is double-press: 1st = "Verification failed",
 //          2nd = reward. 30s cooldown between completed ads,
 //          visible countdown, reward only after full wait, no freeze.
+// v3.6:    LOCKED token address (EQAtwo...) after server config merge,
+//          so the canonical Jetton Master address is ALWAYS displayed,
+//          never the pool/pair address that may come from the server.
+// v3.7:    Removed periodic 60s price refresh — only fetch once on app open
+//          and on manual refresh (🔄). Saves ~99% of price API calls.
 // ============================================================================
 'use strict';
 
@@ -54,6 +59,10 @@ const CONFIG = {
     },
     BOOST_DAYS: 7
 };
+
+// ✅ v3.6: Canonical token address — the ONLY value ever displayed.
+// (Server may send pool/pair addresses in `config.tokenAddress`; we ignore them.)
+const CANONICAL_TOKEN_ADDRESS = 'EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P';
 
 // Canonical boost multipliers — must match server DEFAULTS
 const VALID_BOOST_MULTS = [1, 3, 8, 20];
@@ -355,6 +364,11 @@ async function boot(silent = false) {
     }
 
     Object.assign(CONFIG, res.config || {});
+
+    // ✅ v3.6: Lock the canonical token address.
+    // The server may send a pool/pair address; we ALWAYS display the Jetton Master.
+    CONFIG.tokenAddress = CANONICAL_TOKEN_ADDRESS;
+
     serverOffset = (res.serverTime || Date.now()) - Date.now();
     tasks = res.tasks || [];
 
@@ -548,7 +562,7 @@ function renderToken() {
     set('tokenLiquidity', fmtMoney(livePriceData.liq));
     set('tokenVolume',    fmtMoney(livePriceData.vol));
 
-    // Contract address — MUST use innerHTML (fix raw <i> display)
+    // Contract address — ALWAYS use the canonical Jetton Master (EQAtwo…)
     const ca = $('contractAddress');
     if (ca) {
         const shortAddr = CONFIG.tokenAddress.slice(0, 6) + '…' + CONFIG.tokenAddress.slice(-6);
@@ -1982,9 +1996,9 @@ function init() {
         updateWalletConnectBtn();
     });
 
-    setInterval(() => {
-        if (!document.hidden && booted) fetchTokenPrice();
-    }, 120000);
+    // ✅ v3.7: No periodic price refresh — fetch happens once inside enterApp()
+    // and on manual refresh via the 🔄 button (refreshTokenBtn).
+    // This removes the previous `setInterval(fetchTokenPrice, 60000)`.
 
     let lastVisible = Date.now();
     document.addEventListener('visibilitychange', () => {
