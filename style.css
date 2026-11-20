@@ -8,6 +8,7 @@
    v3.4: Boost status pill (active tier display, left corner of mining card).
    v3.5: Video code task modal styles.
    v3.9: Enhanced Fake Withdraw Feed (title + user + amount + time).
+   v3.10: Internal scroll for History & Tasks lists.
    ========================================================================== */
 
 :root{
@@ -1549,7 +1550,41 @@ a{color:inherit;text-decoration:none}
   padding:0 24px;
   font-size:12.5px;
 }
-.task-list{display:flex;flex-direction:column;gap:10px}
+
+/* ============================================================
+   ✅ v3.10 — INTERNAL SCROLL: TASK LIST
+   كرت Daily Tasks يحتفظ بارتفاع ثابت مع تمرير داخلي
+   ============================================================ */
+.task-list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  max-height:420px;
+  overflow-y:auto;
+  overflow-x:hidden;
+  padding-right:6px;
+  scroll-behavior:smooth;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+}
+
+.task-list::-webkit-scrollbar{
+  width:4px;
+}
+
+.task-list::-webkit-scrollbar-track{
+  background:transparent;
+}
+
+.task-list::-webkit-scrollbar-thumb{
+  background:rgba(57,255,136,.3);
+  border-radius:4px;
+}
+
+.task-list::-webkit-scrollbar-thumb:hover{
+  background:rgba(57,255,136,.5);
+}
+
 .task-item{
   display:flex;
   align-items:center;
@@ -1559,6 +1594,7 @@ a{color:inherit;text-decoration:none}
   background:rgba(255,255,255,.035);
   border:1px solid var(--line);
   transition:opacity .3s,border-color .3s;
+  flex-shrink:0;
 }
 .task-item.done{opacity:.65}
 .task-item.done .task-name{text-decoration:line-through;color:var(--tx-2)}
@@ -1838,8 +1874,7 @@ a{color:inherit;text-decoration:none}
 
 /* Milestones */
 .milestone-list,
-.referral-list,
-.history-list{
+.referral-list{
   display:flex;
   flex-direction:column;
   gap:10px;
@@ -2062,7 +2097,40 @@ a{color:inherit;text-decoration:none}
   box-shadow:0 0 20px -8px rgba(0,152,234,.3);
 }
 
-/* History */
+/* ============================================================
+   ✅ v3.10 — INTERNAL SCROLL: HISTORY LIST
+   كرت Withdrawal History يحتفظ بارتفاع ثابت مع تمرير داخلي
+   ============================================================ */
+.history-list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  max-height:380px;
+  overflow-y:auto;
+  overflow-x:hidden;
+  padding-right:6px;
+  scroll-behavior:smooth;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;
+}
+
+.history-list::-webkit-scrollbar{
+  width:4px;
+}
+
+.history-list::-webkit-scrollbar-track{
+  background:transparent;
+}
+
+.history-list::-webkit-scrollbar-thumb{
+  background:rgba(57,255,136,.3);
+  border-radius:4px;
+}
+
+.history-list::-webkit-scrollbar-thumb:hover{
+  background:rgba(57,255,136,.5);
+}
+
 .history-item{
   display:flex;
   align-items:center;
@@ -2073,6 +2141,7 @@ a{color:inherit;text-decoration:none}
   background:rgba(255,255,255,.03);
   border:1px solid transparent;
   transition:border-color .3s;
+  flex-shrink:0;
 }
 .history-item:active{border-color:var(--line-2)}
 .history-amount{
@@ -2236,6 +2305,11 @@ a{color:inherit;text-decoration:none}
   .boost-status-pill > span:first-child{font-size:9px}
   .boost-status-pill .boost-shortcut-text{font-size:10px}
   .boost-status-pill .boost-shortcut-mult{font-size:11px}
+
+  .history-list,
+  .task-list{
+    max-height:320px;
+  }
 }
 
 /* ---------- Responsive — Medium (361-390px) ---------- */
