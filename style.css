@@ -7,6 +7,7 @@
          rising bubble particles inside mining card.
    v3.4: Boost status pill (active tier display, left corner of mining card).
    v3.5: Video code task modal styles.
+   v3.9: Enhanced Fake Withdraw Feed (title + user + amount + time).
    ========================================================================== */
 
 :root{
@@ -669,11 +670,8 @@ a{color:inherit;text-decoration:none}
 
 /* ============================================================
    BOOST STATUS PILL — Active tier (bronze / silver / gold)
-   Placed in the left corner of the mining card, using
-   .boost-shortcut base styles for identical size/animations.
    ============================================================ */
 .boost-status-pill{
-  /* Inherits everything from .boost-shortcut */
   cursor:default !important;
   pointer-events:none !important;
 }
@@ -729,7 +727,6 @@ a{color:inherit;text-decoration:none}
   text-shadow:0 0 8px rgba(255,216,77,.9);
 }
 
-/* Show emoji icon before name inside the pill */
 .boost-status-pill > span:first-child{
   font-size:11px;
   line-height:1;
@@ -2228,7 +2225,6 @@ a{color:inherit;text-decoration:none}
   #pageReferral .card,
   #pageWallet .card{padding:15px;margin-bottom:9px}
 
-  /* Small-screen override: status pill on the left */
   .boost-status-pill{
     left:10px !important;
     right:auto !important;
@@ -2352,7 +2348,6 @@ input:focus-visible,
     cursor:default;
 }
 
-/* الحزام — شفاف خلف النص */
 .btn-claim.mining-progress::before{
     content:"";
     position:absolute;
@@ -2370,7 +2365,6 @@ input:focus-visible,
     pointer-events:none;
 }
 
-/* لمعة تمر */
 .btn-claim.mining-progress::after{
     content:"";
     position:absolute;
@@ -2389,13 +2383,11 @@ input:focus-visible,
     100%{left:100%;}
 }
 
-/* النص فوق الحزام */
 .btn-claim.mining-progress > *{
     position:relative;
     z-index:2;
 }
 
-/* عند READY — زر أخضر عادي */
 .btn-claim.mining-progress.mining-ready{
     background:var(--grad-fire) !important;
     color:#052A14 !important;
@@ -2449,9 +2441,8 @@ input:focus-visible,
 
 
 /* ============================================================
-   ✅ v3.8 — FAKE WITHDRAW FEED (Live Social Proof Notifications)
-   إشعارات عائمة وهمية تظهر في صفحة Wallet فقط
-   كل 20 ثانية يظهر إشعار جديد (8s ظهور + 12s انتظار)
+   ✅ v3.9 — FAKE WITHDRAW FEED (Live Social Proof) — Enhanced
+   تصميم محسّن: عنوان + مستخدم + مبلغ + وقت
    ============================================================ */
 
 .fake-withdraw-feed {
@@ -2471,10 +2462,10 @@ input:focus-visible,
 
 .fake-withdraw-toast {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 11px;
   width: 100%;
-  padding: 12px 16px;
+  padding: 13px 16px;
   border-radius: var(--r-md);
   background:
     linear-gradient(135deg, rgba(0,255,102,.14), rgba(0,255,102,.04)),
@@ -2511,15 +2502,15 @@ input:focus-visible,
 .fake-withdraw-icon {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
   border-radius: 50%;
-  background: rgba(0,255,102,.16);
-  border: 1px solid rgba(0,255,102,.4);
-  color: var(--fire-2);
-  font-size: 15px;
-  filter: drop-shadow(0 0 8px rgba(57,255,136,.7));
+  background: linear-gradient(135deg, rgba(0,255,102,.22), rgba(0,200,83,.12));
+  border: 1.5px solid rgba(0,255,102,.55);
+  color: var(--gold-bright);
+  font-size: 18px;
+  filter: drop-shadow(0 0 10px rgba(77,255,148,.85));
   animation: fakeWDIconPulse 2s ease-in-out infinite;
 }
 
@@ -2534,16 +2525,32 @@ input:focus-visible,
   line-height: 1.3;
 }
 
+.fake-withdraw-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fire-2);
+  letter-spacing: .02em;
+  margin-bottom: 3px;
+  text-shadow: 0 0 8px rgba(57,255,136,.35);
+}
+
 .fake-withdraw-user {
   font-size: 11.5px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--tx-2);
   letter-spacing: .01em;
   font-family: ui-monospace, Menlo, monospace;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.fake-withdraw-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .fake-withdraw-amount {
@@ -2560,19 +2567,14 @@ input:focus-visible,
   font-weight: 600;
   color: var(--tx-2);
   letter-spacing: .05em;
-  margin-left: 3px;
+  margin-left: 2px;
 }
 
-.fake-withdraw-check {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: rgba(0,200,83,.18);
-  color: var(--ok);
-  font-size: 11px;
+.fake-withdraw-time {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--tx-3);
+  letter-spacing: .01em;
 }
 
 /* ---------- Small screens (≤360px) ---------- */
@@ -2582,19 +2584,22 @@ input:focus-visible,
     width: calc(100% - 24px);
   }
   .fake-withdraw-toast {
-    padding: 10px 13px;
+    padding: 11px 13px;
     gap: 9px;
   }
   .fake-withdraw-icon {
-    width: 34px;
-    height: 34px;
-    font-size: 13px;
+    width: 36px;
+    height: 36px;
+    font-size: 16px;
   }
-  .fake-withdraw-amount {
-    font-size: 13px;
+  .fake-withdraw-title {
+    font-size: 11px;
   }
   .fake-withdraw-user {
     font-size: 10.5px;
+  }
+  .fake-withdraw-amount {
+    font-size: 13px;
   }
 }
 
@@ -2611,7 +2616,7 @@ input:focus-visible,
     bottom: calc(80px + var(--safe-b));
   }
   .fake-withdraw-toast {
-    padding: 9px 13px;
+    padding: 10px 13px;
   }
 }
 
