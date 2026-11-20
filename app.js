@@ -1,16 +1,4 @@
 // ============================================================================
-// GROYPER MINE — EMBER VAULT v3.6
-// Full rewrite — legendary edition with all fixes and new integrations.
-// Ads:     Monetag + Visit Link alternating (10 ads per batch),
-//          Visit Link is double-press: 1st = "Verification failed",
-//          2nd = reward. 30s cooldown between completed ads,
-//          visible countdown, reward only after full wait, no freeze.
-// v3.6:    LOCKED token address (EQAtwo...) after server config merge,
-//          so the canonical Jetton Master address is ALWAYS displayed,
-//          never the pool/pair address that may come from the server.
-// v3.7:    Removed periodic 60s price refresh — only fetch once on app open
-//          and on manual refresh (🔄). Saves ~99% of price API calls.
-// ============================================================================
 'use strict';
 
 // ----------------------------------------------------------------------------
@@ -1808,6 +1796,13 @@ function switchPage(name) {
 
     if (name === 'referral') loadReferralList();
     if (name === 'wallet') renderWithdrawHistory();
+
+    // ✅ v3.8: Fake withdraw feed ONLY on Wallet page
+    if (name === 'wallet') {
+        startFakeWithdrawFeed();
+    } else {
+        stopFakeWithdrawFeed();
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -1974,6 +1969,325 @@ function startEmbers() {
     requestAnimationFrame(frame);
 }
 
+// ============================================================================
+// ✅ v3.8 — FAKE WITHDRAW FEED (Live Social Proof)
+// ============================================================================
+
+const FAKE_WITHDRAW_DATA = [
+    { id: '033****1791', amount: 4610 },
+    { id: '518****4928', amount: 5700 },
+    { id: '829****9451', amount: 10000 },
+    { id: '258****7356', amount: 2680 },
+    { id: '207****6378', amount: 2000 },
+    { id: '941****2083', amount: 8920 },
+    { id: '072****6159', amount: 2000 },
+    { id: '684****3921', amount: 7460 },
+    { id: '315****8472', amount: 10000 },
+    { id: '826****1049', amount: 2000 },
+    { id: '193****7250', amount: 9630 },
+    { id: '570****3168', amount: 4120 },
+    { id: '462****9815', amount: 2000 },
+    { id: '018****5427', amount: 6840 },
+    { id: '753****2094', amount: 3570 },
+    { id: '296****8310', amount: 2000 },
+    { id: '804****1762', amount: 8210 },
+    { id: '135****6948', amount: 2750 },
+    { id: '628****0531', amount: 2000 },
+    { id: '479****8256', amount: 9340 },
+    { id: '902****3175', amount: 6180 },
+    { id: '251****7609', amount: 2000 },
+    { id: '716****4382', amount: 4830 },
+    { id: '084****2917', amount: 7520 },
+    { id: '563****9081', amount: 2000 },
+    { id: '347****1628', amount: 3960 },
+    { id: '895****7340', amount: 10000 },
+    { id: '120****5863', amount: 2000 },
+    { id: '638****4107', amount: 5470 },
+    { id: '271****9538', amount: 7280 },
+    { id: '509****2841', amount: 2000 },
+    { id: '963****7152', amount: 3190 },
+    { id: '416****0385', amount: 8750 },
+    { id: '082****6491', amount: 2000 },
+    { id: '735****1826', amount: 6640 },
+    { id: '194****5073', amount: 2410 },
+    { id: '857****3962', amount: 2000 },
+    { id: '320****8415', amount: 9160 },
+    { id: '641****2759', amount: 4380 },
+    { id: '098****6134', amount: 2000 },
+    { id: '572****9408', amount: 7930 },
+    { id: '813****2671', amount: 5840 },
+    { id: '245****7913', amount: 2000 },
+    { id: '690****4285', amount: 3520 },
+    { id: '137****8052', amount: 9710 },
+    { id: '924****3167', amount: 2000 },
+    { id: '463****0582', amount: 6210 },
+    { id: '781****9426', amount: 2940 },
+    { id: '056****3718', amount: 2000 },
+    { id: '348****6205', amount: 8460 },
+    { id: '912****4573', amount: 4670 },
+    { id: '605****1839', amount: 2000 },
+    { id: '274****8961', amount: 7390 },
+    { id: '839****2516', amount: 5130 },
+    { id: '162****7048', amount: 2000 },
+    { id: '497****3185', amount: 9820 },
+    { id: '723****6490', amount: 3280 },
+    { id: '051****8273', amount: 2000 },
+    { id: '386****1059', amount: 6580 },
+    { id: '940****5721', amount: 2240 },
+    { id: '617****3948', amount: 2000 },
+    { id: '283****7615', amount: 8910 },
+    { id: '754****0286', amount: 5760 },
+    { id: '109****8352', amount: 2000 },
+    { id: '862****4719', amount: 4130 },
+    { id: '531****9064', amount: 7640 },
+    { id: '206****3187', amount: 2000 },
+    { id: '695****7421', amount: 3470 },
+    { id: '418****0593', amount: 9530 },
+    { id: '073****6814', amount: 2000 },
+    { id: '957****2306', amount: 6020 },
+    { id: '341****8759', amount: 2860 },
+    { id: '825****1043', amount: 2000 },
+    { id: '164****5938', amount: 8170 },
+    { id: '709****2461', amount: 4920 },
+    { id: '032****7185', amount: 2000 },
+    { id: '586****9032', amount: 9350 },
+    { id: '218****4679', amount: 3650 },
+    { id: '974****1258', amount: 2000 },
+    { id: '453****8096', amount: 6810 },
+    { id: '801****3527', amount: 2580 },
+    { id: '127****9463', amount: 2000 },
+    { id: '639****0815', amount: 8640 },
+    { id: '285****7341', amount: 4260 },
+    { id: '916****5082', amount: 2000 },
+    { id: '374****1926', amount: 7180 },
+    { id: '052****8647', amount: 5490 },
+    { id: '748****3159', amount: 2000 },
+    { id: '190****6274', amount: 9970 },
+    { id: '563****0418', amount: 3820 },
+    { id: '831****7952', amount: 2000 },
+    { id: '406****2837', amount: 6320 },
+    { id: '975****6140', amount: 2170 },
+    { id: '284****9036', amount: 2000 },
+    { id: '617****5284', amount: 7810 },
+    { id: '039****1746', amount: 4560 },
+    { id: '852****6903', amount: 2000 },
+    { id: '493****8172', amount: 9030 },
+    { id: '126****4509', amount: 3140 },
+    { id: '708****2351', amount: 2000 },
+    { id: '365****9814', amount: 6970 },
+    { id: '941****0628', amount: 5420 },
+    { id: '214****8375', amount: 2000 },
+    { id: '687****3190', amount: 8290 },
+    { id: '053****7462', amount: 2710 },
+    { id: '829****1645', amount: 2000 },
+    { id: '470****5928', amount: 9480 },
+    { id: '192****0384', amount: 3740 },
+    { id: '756****8219', amount: 2000 },
+    { id: '308****4751', amount: 7130 },
+    { id: '645****9207', amount: 4930 },
+    { id: '017****3862', amount: 2000 },
+    { id: '934****7518', amount: 8670 },
+    { id: '521****0946', amount: 2360 },
+    { id: '682****4173', amount: 2000 },
+    { id: '149****8056', amount: 7590 },
+    { id: '873****2614', amount: 5810 },
+    { id: '260****9437', amount: 2000 },
+    { id: '715****6082', amount: 9280 },
+    { id: '394****1725', amount: 3420 },
+    { id: '058****9361', amount: 2000 },
+    { id: '827****4503', amount: 6740 },
+    { id: '461****7298', amount: 2950 },
+    { id: '903****1846', amount: 2000 },
+    { id: '236****8519', amount: 8120 },
+    { id: '679****3042', amount: 4390 },
+    { id: '115****7628', amount: 2000 },
+    { id: '548****0913', amount: 9850 },
+    { id: '792****6351', amount: 5270 },
+    { id: '031****8496', amount: 2000 },
+    { id: '864****2073', amount: 7460 },
+    { id: '407****5918', amount: 2630 },
+    { id: '953****1284', amount: 2000 },
+    { id: '172****8065', amount: 8940 },
+    { id: '628****4139', amount: 3580 },
+    { id: '294****7501', amount: 2000 },
+    { id: '741****0926', amount: 6230 },
+    { id: '086****5347', amount: 4760 },
+    { id: '519****8672', amount: 2000 },
+    { id: '362****1408', amount: 9170 },
+    { id: '905****7283', amount: 3840 },
+    { id: '147****6930', amount: 2000 },
+    { id: '683****2517', amount: 6520 },
+    { id: '250****9146', amount: 2290 },
+    { id: '798****3652', amount: 2000 },
+    { id: '431****0875', amount: 7730 },
+    { id: '064****5291', amount: 4180 },
+    { id: '925****1738', amount: 2000 },
+    { id: '307****8462', amount: 9560 },
+    { id: '612****3905', amount: 5640 },
+    { id: '184****7259', amount: 2000 },
+    { id: '859****0417', amount: 3370 },
+    { id: '273****6184', amount: 8020 },
+    { id: '496****2053', amount: 2000 },
+    { id: '038****9716', amount: 6910 },
+    { id: '724****5830', amount: 2450 },
+    { id: '961****3472', amount: 2000 },
+    { id: '315****8069', amount: 8840 },
+    { id: '670****1925', amount: 4510 },
+    { id: '208****7354', amount: 2000 },
+    { id: '543****9618', amount: 7290 },
+    { id: '892****4071', amount: 3190 },
+    { id: '157****6843', amount: 2000 },
+    { id: '736****0259', amount: 9420 },
+    { id: '401****8736', amount: 5060 },
+    { id: '829****5104', amount: 2000 },
+    { id: '264****9381', amount: 6870 },
+    { id: '915****2067', amount: 3720 },
+    { id: '078****6419', amount: 2000 },
+    { id: '652****3840', amount: 8310 },
+    { id: '340****7158', amount: 2160 },
+    { id: '987****0526', amount: 2000 },
+    { id: '513****8294', amount: 7680 },
+    { id: '176****4305', amount: 4930 },
+    { id: '845****2917', amount: 2000 },
+    { id: '291****6574', amount: 9050 },
+    { id: '608****1439', amount: 3540 },
+    { id: '037****9251', amount: 2000 },
+    { id: '754****6183', amount: 6420 },
+    { id: '429****0765', amount: 2810 },
+    { id: '163****8492', amount: 2000 },
+    { id: '902****5317', amount: 7980 },
+    { id: '586****2041', amount: 4650 },
+    { id: '321****9784', amount: 2000 },
+    { id: '674****1508', amount: 8730 },
+    { id: '095****8263', amount: 3070 },
+    { id: '817****4390', amount: 2000 },
+    { id: '452****7016', amount: 7140 },
+    { id: '738****2659', amount: 5390 },
+    { id: '109****4832', amount: 2000 },
+    { id: '863****9175', amount: 9670 },
+    { id: '205****6481', amount: 3980 },
+    { id: '591****0327', amount: 2000 },
+    { id: '346****7850', amount: 7560 },
+    { id: '924****1608', amount: 4820 },
+    { id: '018****5937', amount: 2000 },
+    { id: '705****2841', amount: 9210 },
+    { id: '438****6179', amount: 2630 },
+    { id: '152****9064', amount: 2000 },
+    { id: '879****3415', amount: 8390 },
+    { id: '267****5183', amount: 4120 },
+    { id: '630****7942', amount: 2000 },
+    { id: '941****5286', amount: 9850 },
+    { id: '384****0719', amount: 5740 },
+    { id: '716****2058', amount: 2000 }
+];
+
+// State
+const FAKE_FEED_SHOW_MS = 8000;     // visible duration
+const FAKE_FEED_GAP_MS  = 12000;    // gap after hide (total cycle = 20s)
+
+let fakeFeedQueue = [];
+let fakeFeedTimer = null;
+let fakeFeedHideTimer = null;
+let fakeFeedActive = false;
+let fakeFeedCurrent = null;
+
+function shuffleArray(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
+
+function rebuildFakeFeedQueue() {
+    fakeFeedQueue = shuffleArray(FAKE_WITHDRAW_DATA);
+}
+
+function getFeedContainer() {
+    let el = $('fakeWithdrawFeed');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'fakeWithdrawFeed';
+        el.className = 'fake-withdraw-feed';
+        el.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(el);
+    }
+    return el;
+}
+
+function showNextFakeWithdraw() {
+    if (!fakeFeedActive) return;
+    if (!fakeFeedQueue.length) rebuildFakeFeedQueue();
+    const item = fakeFeedQueue.shift();
+    if (!item) return;
+
+    // Respect reduced motion
+    const reduceMotion = window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const container = getFeedContainer();
+
+    // Build toast
+    const toast = document.createElement('div');
+    toast.className = 'fake-withdraw-toast';
+    toast.innerHTML = `
+        <div class="fake-withdraw-icon"><i class="fas fa-arrow-up" aria-hidden="true"></i></div>
+        <div class="fake-withdraw-body">
+            <div class="fake-withdraw-user">User ID ${item.id}</div>
+            <div class="fake-withdraw-amount">${item.amount.toLocaleString()} <small>GROYP</small></div>
+        </div>
+        <div class="fake-withdraw-check"><i class="fas fa-check" aria-hidden="true"></i></div>
+    `;
+
+    container.innerHTML = '';
+    container.appendChild(toast);
+    fakeFeedCurrent = toast;
+
+    // Trigger slide-in on next frame
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toast.classList.add('show');
+        });
+    });
+
+    // Hide after SHOW_MS
+    fakeFeedHideTimer = setTimeout(() => {
+        toast.classList.add('hide');
+        setTimeout(() => {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, reduceMotion ? 20 : 600);
+        fakeFeedCurrent = null;
+    }, FAKE_FEED_SHOW_MS);
+
+    // Schedule next
+    fakeFeedTimer = setTimeout(showNextFakeWithdraw, FAKE_FEED_SHOW_MS + FAKE_FEED_GAP_MS);
+}
+
+function startFakeWithdrawFeed() {
+    if (fakeFeedActive) return;
+    fakeFeedActive = true;
+    rebuildFakeFeedQueue();
+    console.log('💸 Fake withdraw feed started');
+
+    // First toast after 3s so page has time to settle
+    fakeFeedTimer = setTimeout(showNextFakeWithdraw, 3000);
+}
+
+function stopFakeWithdrawFeed() {
+    if (!fakeFeedActive) return;
+    fakeFeedActive = false;
+    if (fakeFeedTimer) { clearTimeout(fakeFeedTimer); fakeFeedTimer = null; }
+    if (fakeFeedHideTimer) { clearTimeout(fakeFeedHideTimer); fakeFeedHideTimer = null; }
+
+    // Remove visible toast immediately
+    const container = $('fakeWithdrawFeed');
+    if (container) container.innerHTML = '';
+    fakeFeedCurrent = null;
+
+    console.log('💸 Fake withdraw feed stopped');
+}
+
 // ----------------------------------------------------------------------------
 // 21. INIT
 // ----------------------------------------------------------------------------
@@ -2005,6 +2319,15 @@ function init() {
         if (!document.hidden && booted && Date.now() - lastVisible > 60000) {
             lastVisible = Date.now();
             boot(true);
+        }
+    });
+
+    // ✅ v3.8: Stop the fake feed when tab becomes hidden
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopFakeWithdrawFeed();
+        } else if (document.querySelector('.nav-item.active')?.dataset.page === 'wallet') {
+            startFakeWithdrawFeed();
         }
     });
 }
