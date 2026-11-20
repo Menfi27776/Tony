@@ -1970,7 +1970,9 @@ function startEmbers() {
 }
 
 // ============================================================================
-// ✅ v3.8 — FAKE WITHDRAW FEED (Live Social Proof)
+// ✅ v3.9 — FAKE WITHDRAW FEED (Live Social Proof) — Enhanced
+// 200 fake withdrawal notifications shown ONLY on Wallet page.
+// Each toast: title + user ID + amount + time · every 20s (8s visible + 12s gap)
 // ============================================================================
 
 const FAKE_WITHDRAW_DATA = [
@@ -2228,16 +2230,21 @@ function showNextFakeWithdraw() {
 
     const container = getFeedContainer();
 
-    // Build toast
+    // ✅ v3.9: Enhanced toast design — title + user + amount + time
     const toast = document.createElement('div');
     toast.className = 'fake-withdraw-toast';
     toast.innerHTML = `
-        <div class="fake-withdraw-icon"><i class="fas fa-arrow-up" aria-hidden="true"></i></div>
-        <div class="fake-withdraw-body">
-            <div class="fake-withdraw-user">User ID ${item.id}</div>
-            <div class="fake-withdraw-amount">${item.amount.toLocaleString()} <small>GROYP</small></div>
+        <div class="fake-withdraw-icon">
+            <i class="fas fa-circle-check" aria-hidden="true"></i>
         </div>
-        <div class="fake-withdraw-check"><i class="fas fa-check" aria-hidden="true"></i></div>
+        <div class="fake-withdraw-body">
+            <div class="fake-withdraw-title">Withdrawal Success</div>
+            <div class="fake-withdraw-user">User ID ${item.id}</div>
+            <div class="fake-withdraw-meta">
+                <span class="fake-withdraw-amount">${item.amount.toLocaleString()} <small>GROYP</small></span>
+                <span class="fake-withdraw-time">· just now</span>
+            </div>
+        </div>
     `;
 
     container.innerHTML = '';
