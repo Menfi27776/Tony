@@ -2185,7 +2185,7 @@ const FAKE_WITHDRAW_DATA = [
 
 // State
 const FAKE_FEED_SHOW_MS = 8000;     // visible duration
-const FAKE_FEED_GAP_MS  = 12000;    // gap after hide (total cycle = 20s)
+const FAKE_FEED_GAP_MS  = 60000;    // gap after hide (total cycle = 20s)
 
 let fakeFeedQueue = [];
 let fakeFeedTimer = null;
