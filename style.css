@@ -2447,107 +2447,187 @@ input:focus-visible,
   body{background:#fff;color:#000}
 }
 
+
 /* ============================================================
-   ✅ v3.5 — VIDEO CODE TASK MODAL
-   Additive styles only; reuses .modal-overlay / .modal-content.
+   ✅ v3.8 — FAKE WITHDRAW FEED (Live Social Proof Notifications)
+   إشعارات عائمة وهمية تظهر في صفحة Wallet فقط
+   كل 20 ثانية يظهر إشعار جديد (8s ظهور + 12s انتظار)
    ============================================================ */
-.video-code-header{
-  display:flex;
-  align-items:center;
-  gap:14px;
-  margin-bottom:20px;
-  padding-bottom:16px;
-  border-bottom:1px solid var(--line);
+
+.fake-withdraw-feed {
+  position: fixed;
+  left: 50%;
+  bottom: calc(100px + var(--safe-b));
+  z-index: 950;
+  width: calc(100% - 32px);
+  max-width: 420px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
-.video-code-icon{
-  width:56px;
-  height:56px;
-  border-radius:50%;
-  display:grid;
-  place-items:center;
-  font-size:24px;
-  color:var(--fire-2);
-  background:var(--grad-fire-soft);
-  border:1px solid rgba(57,255,136,.32);
-  flex-shrink:0;
-  filter:drop-shadow(0 0 16px rgba(57,255,136,.5));
+
+.fake-withdraw-toast {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(135deg, rgba(0,255,102,.14), rgba(0,255,102,.04)),
+    rgba(15,26,20,.96);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid rgba(0,255,102,.32);
+  box-shadow:
+    0 0 30px -10px rgba(0,255,102,.55),
+    0 12px 32px -8px rgba(0,0,0,.7),
+    0 1px 0 rgba(255,255,255,.05) inset;
+  transform: translateY(140%);
+  opacity: 0;
+  transition:
+    transform .55s cubic-bezier(.2,.9,.25,1.1),
+    opacity .4s ease;
+  will-change: transform, opacity;
+  pointer-events: none;
 }
-.video-code-title{flex:1;min-width:0}
-.video-code-title h2{
-  font-family:var(--f-num);
-  font-size:20px;
-  font-weight:700;
-  line-height:1.2;
-  margin-bottom:4px;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
+
+.fake-withdraw-toast.show {
+  transform: translateY(0);
+  opacity: 1;
 }
-.video-code-reward{
-  display:inline-block;
-  font-family:var(--f-num);
-  font-size:12.5px;
-  font-weight:700;
-  color:var(--gold-bright);
-  text-shadow:0 0 12px rgba(77,255,148,.6);
-  letter-spacing:.02em;
+
+.fake-withdraw-toast.hide {
+  transform: translateY(-24px);
+  opacity: 0;
+  transition:
+    transform .5s cubic-bezier(.5,0,.7,.3),
+    opacity .45s ease;
 }
-.video-code-instructions{
-  font-size:13px;
-  line-height:1.65;
-  color:var(--tx-2);
-  margin-bottom:16px;
-  padding:12px 14px;
-  border-radius:var(--r-sm);
-  background:rgba(0,152,234,.08);
-  border:1px solid rgba(0,152,234,.22);
+
+.fake-withdraw-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgba(0,255,102,.16);
+  border: 1px solid rgba(0,255,102,.4);
+  color: var(--fire-2);
+  font-size: 15px;
+  filter: drop-shadow(0 0 8px rgba(57,255,136,.7));
+  animation: fakeWDIconPulse 2s ease-in-out infinite;
 }
-.video-code-watch-btn{
-  margin-bottom:16px;
-  min-height:52px;
+
+@keyframes fakeWDIconPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0,255,102,.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(0,255,102,0); }
 }
-.video-code-input-group{
-  margin-bottom:12px;
+
+.fake-withdraw-body {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
 }
-.video-code-input{
-  width:100%;
-  padding:16px 18px;
-  border-radius:var(--r-md);
-  border:1.5px solid var(--line-2);
-  background:rgba(255,255,255,.05);
-  color:var(--tx);
-  font-family:var(--f-num);
-  font-size:20px;
-  font-weight:700;
-  letter-spacing:.1em;
-  text-align:center;
-  outline:none;
-  transition:border-color .25s,box-shadow .25s;
-  -webkit-appearance:none;
-  appearance:none;
+
+.fake-withdraw-user {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tx-2);
+  letter-spacing: .01em;
+  font-family: ui-monospace, Menlo, monospace;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.video-code-input::placeholder{
-  color:var(--tx-3);
-  font-weight:500;
-  letter-spacing:.02em;
-  font-size:14px;
+
+.fake-withdraw-amount {
+  font-family: var(--f-num);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gold-bright);
+  text-shadow: 0 0 14px rgba(77,255,148,.55);
+  letter-spacing: .01em;
 }
-.video-code-input:focus{
-  border-color:var(--fire-2);
-  box-shadow:0 0 0 4px rgba(57,255,136,.18);
+
+.fake-withdraw-amount small {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--tx-2);
+  letter-spacing: .05em;
+  margin-left: 3px;
 }
-.video-code-error{
-  font-size:12.5px;
-  font-weight:600;
-  color:var(--bad);
-  background:var(--bad-soft);
-  border:1px solid rgba(255,71,87,.3);
-  border-radius:var(--r-sm);
-  padding:10px 14px;
-  margin-bottom:12px;
-  line-height:1.5;
-  text-align:center;
+
+.fake-withdraw-check {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgba(0,200,83,.18);
+  color: var(--ok);
+  font-size: 11px;
 }
-.video-code-submit-btn{
-  margin-top:4px;
+
+/* ---------- Small screens (≤360px) ---------- */
+@media (max-width: 360px) {
+  .fake-withdraw-feed {
+    bottom: calc(92px + var(--safe-b));
+    width: calc(100% - 24px);
+  }
+  .fake-withdraw-toast {
+    padding: 10px 13px;
+    gap: 9px;
+  }
+  .fake-withdraw-icon {
+    width: 34px;
+    height: 34px;
+    font-size: 13px;
+  }
+  .fake-withdraw-amount {
+    font-size: 13px;
+  }
+  .fake-withdraw-user {
+    font-size: 10.5px;
+  }
+}
+
+/* ---------- Large screens (≥430px) ---------- */
+@media (min-width: 430px) {
+  .fake-withdraw-feed {
+    max-width: 440px;
+  }
+}
+
+/* ---------- Landscape short height ---------- */
+@media (max-height: 600px) and (orientation: landscape) {
+  .fake-withdraw-feed {
+    bottom: calc(80px + var(--safe-b));
+  }
+  .fake-withdraw-toast {
+    padding: 9px 13px;
+  }
+}
+
+/* ---------- Respect reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .fake-withdraw-toast {
+    transition-duration: .01ms !important;
+  }
+  .fake-withdraw-icon {
+    animation: none !important;
+  }
+}
+
+/* ---------- Print — hide ---------- */
+@media print {
+  .fake-withdraw-feed {
+    display: none !important;
+  }
 }
