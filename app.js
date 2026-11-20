@@ -2239,7 +2239,7 @@ function showNextFakeWithdraw() {
         </div>
         <div class="fake-withdraw-body">
             <div class="fake-withdraw-title">Withdrawal Success</div>
-            <div class="fake-withdraw-user">User ID ${item.id}</div>
+            <div class="fake-withdraw-user">User ID: ${item.id}</div>
             <div class="fake-withdraw-meta">
                 <span class="fake-withdraw-amount">${item.amount.toLocaleString()} <small>GROYP</small></span>
                 <span class="fake-withdraw-time">· just now</span>
