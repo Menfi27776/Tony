@@ -49,7 +49,6 @@ const CONFIG = {
 };
 
 // ✅ v3.6: Canonical token address — the ONLY value ever displayed.
-// (Server may send pool/pair addresses in `config.tokenAddress`; we ignore them.)
 const CANONICAL_TOKEN_ADDRESS = 'EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P';
 
 // Canonical boost multipliers — must match server DEFAULTS
@@ -204,13 +203,15 @@ function initTonConnect() {
     const root = $('ton-connect-btn');
     if (!root) { console.error('#ton-connect-btn missing'); return; }
     try {
+        // ✅ تعديل 1: إضافة twaReturnUrl لإعادة Telegram Wallet إلى الميني آب بعد الموافقة
         window.tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI({
             manifestUrl: location.origin + '/tonconnect-manifest.json',
             buttonRootId: 'ton-connect-btn',
-            language: 'en'
+            language: 'en',
+            twaReturnUrl: `https://t.me/${CONFIG.botUsername}/${CONFIG.botShortName}`
         });
 
-        // ✅ الحل: استعادة الجلسة تلقائياً عند تحميل الصفحة (خاصة بعد إعادة تحميل WebView على أندرويد)
+        // ✅ تعديل 3: استعادة الجلسة عند تحميل الصفحة
         window.tonConnectUI.restoreConnection().then(async (wallet) => {
             if (wallet) {
                 console.log('✅ TON Connect session restored after reload');
@@ -247,7 +248,7 @@ function initTonConnect() {
             updateWalletConnectBtn();
             hideWalletError();
 
-            // ✅✅✅ الحل: إغلاق النافذة المنبثقة فوراً بعد نجاح الربط
+            // إغلاق النافذة المنبثقة فوراً بعد نجاح الربط
             try {
                 window.tonConnectUI.closeModal();
                 console.log('✅ TON Connect modal closed after successful connection');
@@ -323,6 +324,7 @@ function hideWalletError() {
     if (box) box.style.display = 'none';
 }
 
+// ✅ تعديل 2: استخدام openModal() بدلاً من connectWallet() لإزالة رسالة الخطأ
 async function onWalletConnectBtnClick() {
     if (!window.tonConnectUI) return;
     try {
@@ -330,7 +332,8 @@ async function onWalletConnectBtnClick() {
             await window.tonConnectUI.disconnect();
             vibrate('light');
         } else {
-            await window.tonConnectUI.connectWallet();
+            // فتح المودال (الطريقة الموصى بها) بدلاً من connectWallet() المهجورة
+            await window.tonConnectUI.openModal();
             vibrate('medium');
         }
     } catch (e) {
@@ -380,16 +383,11 @@ async function boot(silent = false) {
     }
 
     Object.assign(CONFIG, res.config || {});
-
-    // ✅ v3.6: Lock the canonical token address.
-    // The server may send a pool/pair address; we ALWAYS display the Jetton Master.
     CONFIG.tokenAddress = CANONICAL_TOKEN_ADDRESS;
 
     serverOffset = (res.serverTime || Date.now()) - Date.now();
     tasks = res.tasks || [];
 
-    // ✅ v3.4: Re-apply canonical boosts after server config merge
-    // (server already sends canonical values, but this guards against any mismatch)
     CONFIG.BOOSTS = {
         bronze: { price: 3,  multiplier: 3,  name: 'SPARK',   icon: '🥉' },
         silver: { price: 6,  multiplier: 8,  name: 'BLAZE',   icon: '🥈' },
@@ -417,8 +415,6 @@ async function boot(silent = false) {
     if (res.user && res.user.wallet) {
         currentUser = res.user;
         tonWalletAddress = res.user.wallet;
-        // DB wallet is just a record; do NOT treat as live connection
-        // Live connection is derived from tonConnectUI only.
         tonConnected = isWalletReady();
         if (!userId && currentUser.userId) userId = String(currentUser.userId);
         enterApp();
@@ -450,9 +446,7 @@ function enterApp() {
     if ($('userHandle')) $('userHandle').textContent = '@' + (u.username || currentUser?.username || 'user');
     if ($('walletUserHandle')) $('walletUserHandle').textContent = '@' + (u.username || currentUser?.username || 'user');
 
-    // Load ad progress from localStorage
     loadAdsState();
-
     renderAll();
 
     if (miningTimer) clearInterval(miningTimer);
@@ -486,7 +480,6 @@ async function fetchTokenPrice(force = false) {
         return;
     }
 
-    // 1) DexScreener
     try {
         const r = await fetch(
             `https://api.dexscreener.com/latest/dex/tokens/${CONFIG.tokenAddress}`,
@@ -516,7 +509,6 @@ async function fetchTokenPrice(force = false) {
         console.warn('DexScreener failed:', e.message);
     }
 
-    // 2) Server fallback
     try {
         const res = await apiRequest('/price');
         if (res.success && res.price) {
@@ -578,7 +570,6 @@ function renderToken() {
     set('tokenLiquidity', fmtMoney(livePriceData.liq));
     set('tokenVolume',    fmtMoney(livePriceData.vol));
 
-    // Contract address — ALWAYS use the canonical Jetton Master (EQAtwo…)
     const ca = $('contractAddress');
     if (ca) {
         const shortAddr = CONFIG.tokenAddress.slice(0, 6) + '…' + CONFIG.tokenAddress.slice(-6);
@@ -630,7 +621,6 @@ function getMiningData() {
     };
 }
 
-// ✅ v3.4: Strict whitelist — only canonical multipliers accepted
 function getActiveMultiplier() {
     if (!currentUser) return 1;
     const exp = Number(currentUser.boostExpiresAt) || 0;
@@ -639,8 +629,6 @@ function getActiveMultiplier() {
     return VALID_BOOST_MULTS.includes(m) ? m : 1;
 }
 
-// NEW — returns 'bronze'|'silver'|'gold'|null (active boost tier)
-// ✅ v3.4: Strict check — boostMultiplier MUST match canonical tier value
 function getActiveBoostType() {
     if (!currentUser) return null;
     const exp = Number(currentUser.boostExpiresAt) || 0;
@@ -652,8 +640,6 @@ function getActiveBoostType() {
     return type;
 }
 
-// NEW — update boost status pill (called from renderAll only)
-// ✅ v3.4: Always shows — FREE 1x when no active boost, tier when active
 function renderBoostStatusPill() {
     const pill = $('boostStatusPill');
     if (!pill) return;
@@ -661,19 +647,15 @@ function renderBoostStatusPill() {
     const iconEl = $('boostStatusIcon');
     const nameEl = $('boostStatusName');
     const multEl = $('boostStatusMult');
-
-    // Determine active tier
     const activeTier = getActiveBoostType();
 
     if (activeTier) {
-        // Active boost — show tier
         const cfgBoost = CANONICAL_BOOSTS[activeTier];
         if (iconEl) iconEl.textContent = cfgBoost.icon || '⚡';
         if (nameEl) nameEl.textContent = cfgBoost.name;
         if (multEl) multEl.textContent = `${cfgBoost.multiplier}x`;
         pill.dataset.tier = activeTier;
     } else {
-        // No active boost — show FREE 1x
         if (iconEl) iconEl.textContent = '⚡';
         if (nameEl) nameEl.textContent = 'FREE';
         if (multEl) multEl.textContent = '1x';
@@ -746,7 +728,6 @@ async function claimMining() {
     if (isClaimingMining) return;
     if (!getMiningData().canClaim) return showToast('Not ready yet', 'warning');
 
-    // 30s cooldown between ads
     if (lastAdTime > 0 && now() - lastAdTime < CONFIG.AD_COOLDOWN_MS) {
         const remaining = Math.ceil((CONFIG.AD_COOLDOWN_MS - (now() - lastAdTime)) / 1000);
         return showToast(`Please wait ${remaining}s before next ad`, 'warning');
@@ -756,11 +737,8 @@ async function claimMining() {
     const btn = $('claimMiningBtn');
     const originalBtn = btn?.innerHTML;
 
-    // Monetag only — no visit link in mining claim.
-    // If Monetag unavailable, proceed with claim after countdown.
     const provider = showMonetagAd() ? 'monetag' : null;
 
-    // 2. 18s countdown on button (visible — no freeze)
     let remaining = (CONFIG.ADS_MIN_GAP_SEC || 18);
     if (btn) {
         btn.disabled = true;
@@ -780,18 +758,14 @@ async function claimMining() {
     }, 1000);
 
     try {
-        // 3. Wait exactly 18s
         await sleep((CONFIG.ADS_MIN_GAP_SEC || 18) * 1000);
         clearInterval(interval);
 
-        // 4. Claim on server AFTER 18s
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Claiming...';
         const res = await apiRequest('/mining/claim', { method: 'POST' });
         if (!res.success) throw new Error(res.error || 'Claim failed');
 
-        // ✅ Success — record ad time (30s cooldown)
         lastAdTime = now();
-
         currentUser = res.user;
         vibrate('success');
         showToast(`+${Math.floor(res.reward).toLocaleString()} ${CONFIG.tokenSymbol}`, 'success');
@@ -812,8 +786,7 @@ async function claimMining() {
 }
 
 // ----------------------------------------------------------------------------
-// 10. ADS — Monetag + Visit Link alternating (10 per batch)
-//     Visit Link is a double-press: 1st = fail, 2nd = reward
+// 10. ADS
 // ----------------------------------------------------------------------------
 function loadAdsState() {
     try {
@@ -852,7 +825,6 @@ function getAdsCooldownLeft() {
     return Math.max(0, (currentUser?.adsCooldownUntil || 0) - now());
 }
 
-// Which ad type is next? Alternates: even → Monetag, odd → Visit
 function getNextAdType() {
     return (adWatchedLocal % 2 === 0) ? 'monetag' : 'visit';
 }
@@ -864,7 +836,6 @@ function renderAds() {
     const perBatch = CONFIG.MAX_ADS_PER_BATCH;
     const perAd = CONFIG.ADS_BATCH_REWARD / perBatch;
 
-    // Segments
     const seg = $('adsSegments');
     if (seg) {
         if (seg.children.length !== perBatch) {
@@ -873,13 +844,11 @@ function renderAds() {
         [...seg.children].forEach((c, i) => c.classList.toggle('active', i < watched));
     }
 
-    // Counter
     const acc = $('adsAccumulated');
     const counter = $('adsCounter');
     if (acc) acc.textContent = `${Math.floor(watched * perAd)} ${CONFIG.tokenSymbol}`;
     if (counter) counter.textContent = `${watched}/${perBatch}`;
 
-    // Buttons
     const complete = watched >= perBatch;
     const cd = getAdsCooldownLeft();
     const watchBtn = $('watchAdBtn');
@@ -894,14 +863,12 @@ function renderAds() {
         if (t) t.textContent = formatTimeLeft(cd);
     }
 
-    // Labels — always generic "WATCH AD", never expose provider
     const watchLabel = $('watchAdLabel');
     if (watchLabel) watchLabel.textContent = `WATCH AD (+${perAd} ${CONFIG.tokenSymbol})`;
     const claimLabel = $('claimAdsLabel');
     if (claimLabel) claimLabel.textContent = `CLAIM ${CONFIG.ADS_BATCH_REWARD} ${CONFIG.tokenSymbol}`;
 }
 
-// Monetag — instant call, return false if unavailable
 function showMonetagAd() {
     if (typeof window.show_12265394 !== 'function') {
         console.warn('❌ Monetag not available');
@@ -926,7 +893,6 @@ function showMonetagAd() {
     }
 }
 
-// Visit link — opens in Telegram browser or new tab
 function openVisitAd() {
     try {
         if (tg && typeof tg.openLink === 'function') {
@@ -947,18 +913,14 @@ function openVisitAd() {
     }
 }
 
-// Provider entrypoint — used ONLY by watchAd() in Earn page.
-// claimMining uses Monetag only (see claimMining).
 function tryTriggerAdSDK() {
     const type = getNextAdType();
     if (type === 'visit') {
         if (openVisitAd()) return 'visit';
-        // Fallback to Monetag if visit can't open
         if (showMonetagAd()) return 'monetag';
         return null;
     }
     if (showMonetagAd()) return 'monetag';
-    // Fallback to Visit if Monetag unavailable
     if (openVisitAd()) return 'visit';
     return null;
 }
@@ -968,7 +930,6 @@ async function watchAd() {
     if (adWatchedLocal >= CONFIG.MAX_ADS_PER_BATCH) return showToast('Batch complete — claim reward', 'warning');
     if (getAdsCooldownLeft() > 0) return showToast('Ads on cooldown', 'warning');
 
-    // 30s cooldown between COMPLETED ads only
     if (lastAdTime > 0 && now() - lastAdTime < CONFIG.AD_COOLDOWN_MS) {
         const remaining = Math.ceil((CONFIG.AD_COOLDOWN_MS - (now() - lastAdTime)) / 1000);
         return showToast(`Please wait ${remaining}s before next ad`, 'warning');
@@ -981,7 +942,6 @@ async function watchAd() {
     const btn = $('watchAdBtn');
     const originalBtn = btn?.innerHTML;
 
-    // 1. Trigger the ad provider
     let provider = null;
     if (isVisit) {
         provider = openVisitAd() ? 'visit' : null;
@@ -997,7 +957,6 @@ async function watchAd() {
         return;
     }
 
-    // 2. Countdown (visible — no freeze)
     const waitSeconds = (provider === 'visit')
         ? (CONFIG.VISIT_AD_SEC || 15)
         : (CONFIG.ADS_MIN_GAP_SEC || 18);
@@ -1017,20 +976,16 @@ async function watchAd() {
     }, 1000);
 
     try {
-        // 3. Wait full duration
         await sleep(waitSeconds * 1000);
         clearInterval(interval);
 
-        // 4. Resolve outcome
         if (provider === 'visit') {
             if (visitAttempt === 1) {
-                // ❌ First press — forced verification failure, no cooldown
                 visitAttempt = 2;
                 saveAdsState();
                 vibrate('error');
                 showToast('❌ Verification failed. Try again', 'error', 3200);
             } else {
-                // ✅ Second press — reward + cooldown
                 visitAttempt = 1;
                 lastAdTime = now();
                 adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
@@ -1040,7 +995,6 @@ async function watchAd() {
                 showToast(`+${CONFIG.ADS_BATCH_REWARD / CONFIG.MAX_ADS_PER_BATCH} ${CONFIG.tokenSymbol}`, 'success');
             }
         } else {
-            // Monetag — normal success
             visitAttempt = 1;
             lastAdTime = now();
             adWatchedLocal = Math.min(adWatchedLocal + 1, CONFIG.MAX_ADS_PER_BATCH);
@@ -1104,7 +1058,7 @@ async function claimAdsReward() {
 }
 
 // ----------------------------------------------------------------------------
-// 11. TASKS — Strict chat verification
+// 11. TASKS
 // ----------------------------------------------------------------------------
 function renderTasks() {
     const c = $('taskList');
@@ -1115,7 +1069,6 @@ function renderTasks() {
     c.innerHTML = tasks.map(t => {
         const d = done.has(t.id);
         const isVideo = t.type === 'video_code';
-        // ✅ v3.5: Video code tasks show WATCH button and open modal
         const btnLabel = d ? '✓ DONE' : (isVideo ? 'WATCH' : 'START');
         const btnAct = d ? 'done' : (isVideo ? 'video' : 'start');
         return `<div class="task-item ${d ? 'done' : ''}" data-task-id="${t.id}">
@@ -1135,7 +1088,6 @@ async function taskAction(taskId, action) {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    // ✅ v3.5: Video code task — open modal instead of opening link directly
     if (action === 'video') {
         openVideoCodeModal(task);
         return;
@@ -1153,7 +1105,6 @@ async function taskAction(taskId, action) {
         return;
     }
 
-    // Verify — server enforces membership for verify='chat'
     const res = await apiRequest('/tasks/verify', { method: 'POST', body: { taskId } });
     if (res.success) {
         currentUser = res.user;
@@ -1167,7 +1118,7 @@ async function taskAction(taskId, action) {
 }
 
 // ----------------------------------------------------------------------------
-// 11b. VIDEO CODE TASK — Modal + code submission  ✅ v3.5
+// 11b. VIDEO CODE TASK
 // ----------------------------------------------------------------------------
 function openVideoCodeModal(task) {
     if (!task) return;
@@ -1175,7 +1126,6 @@ function openVideoCodeModal(task) {
     const modal = $('videoCodeModal');
     const content = $('videoCodeDetails');
     if (!modal || !content) {
-        // Fallback: open video directly if modal missing
         if (task.url) {
             if (tg?.openLink) tg.openLink(task.url);
             else window.open(task.url, '_blank');
@@ -1217,7 +1167,6 @@ function openVideoCodeModal(task) {
         </button>
     `;
 
-    // Bind watch video button
     const watchBtn = $('watchVideoBtn');
     if (watchBtn) {
         watchBtn.onclick = () => {
@@ -1232,13 +1181,11 @@ function openVideoCodeModal(task) {
         };
     }
 
-    // Bind submit button
     const submitBtn = $('submitVideoCodeBtn');
     if (submitBtn) {
         submitBtn.onclick = () => submitVideoCode(task.id);
     }
 
-    // Enter key submits
     const input = $('videoCodeInput');
     if (input) {
         input.addEventListener('keydown', (e) => {
@@ -1344,7 +1291,7 @@ async function checkin() {
 }
 
 // ----------------------------------------------------------------------------
-// 13. REFERRAL — Mini App direct link
+// 13. REFERRAL
 // ----------------------------------------------------------------------------
 function renderReferral() {
     if (!currentUser) return;
@@ -1382,7 +1329,6 @@ function renderReferral() {
         }).join('');
     }
 
-    // Referral link — Mini App direct format
     const linkInput = $('referralLinkInput');
     if (linkInput) {
         const tgUser = tg?.initDataUnsafe?.user;
@@ -1474,7 +1420,6 @@ function renderWallet() {
     set('availableToWithdraw', `${Math.floor(currentUser.balance || 0).toLocaleString()} ${CONFIG.tokenSymbol}`);
     set('minWithdrawHint', `Minimum: ${CONFIG.MIN_WITHDRAW.toLocaleString()} ${CONFIG.tokenSymbol}`);
 
-    // Smart wallet button + address display
     updateWalletConnectBtn();
     renderWithdrawHistory();
 }
@@ -1517,7 +1462,6 @@ async function submitWithdraw() {
     if (amount < CONFIG.MIN_WITHDRAW) return showToast(`Minimum ${CONFIG.MIN_WITHDRAW}`, 'error');
     if (amount > currentUser.balance) return showToast('Insufficient balance', 'error');
 
-    // Pre-flight: verify live wallet session before touching payment
     if (!isWalletReady()) {
         showWalletError('Wallet is not connected. Please connect or reconnect your wallet to continue.');
         return showToast('Connect wallet first', 'warning');
@@ -1572,7 +1516,7 @@ async function submitWithdraw() {
 }
 
 // ----------------------------------------------------------------------------
-// 15. BOOSTS — 3x/8x/20x with details
+// 15. BOOSTS
 // ----------------------------------------------------------------------------
 function getBoostDetails(type) {
     const boost = CONFIG.BOOSTS[type];
@@ -1582,7 +1526,6 @@ function getBoostDetails(type) {
     const claimsPerDay = Math.floor(24 / 3);
     const days = CONFIG.BOOST_DAYS || 7;
 
-    // ✅ v3.4: use canonical multiplier (with fallback)
     const mult = boost.multiplier || boost.mult || 1;
 
     const perClaim = baseReward * mult;
@@ -1611,7 +1554,6 @@ function showBoostDetails(type) {
     const modal = $('boostModal');
     const content = $('boostDetails');
     if (!modal || !content) {
-        // Fallback: direct confirm
         buyBoostDirect(type);
         return;
     }
@@ -1714,7 +1656,6 @@ async function buyBoostDirect(type) {
         } catch (e) {
             const c = classifyTonError(e);
             if (c.type === 'session') {
-                // Try to route user to the wallet page to reconnect
                 showToast(c.msg, 'error', 5000);
                 updateWalletConnectBtn();
                 throw new Error(c.msg);
@@ -1743,7 +1684,6 @@ async function buyBoost(type) {
     showBoostDetails(type);
 }
 
-// Render boost cards dynamically
 function renderBoosts() {
     const container = document.querySelector('.boost-scroll');
     if (!container) return;
@@ -1753,7 +1693,6 @@ function renderBoosts() {
     const days = CONFIG.BOOST_DAYS || 7;
 
     const cards = Object.entries(CONFIG.BOOSTS).map(([type, b]) => {
-        // ✅ v3.4: canonical multiplier (with fallback)
         const mult = b.multiplier || b.mult || 1;
         const perClaim = baseReward * mult;
         const daily = perClaim * claimsPerDay;
@@ -1825,7 +1764,6 @@ function switchPage(name) {
     if (name === 'referral') loadReferralList();
     if (name === 'wallet') renderWithdrawHistory();
 
-    // ✅ v3.8: Fake withdraw feed ONLY on Wallet page
     if (name === 'wallet') {
         startFakeWithdrawFeed();
     } else {
@@ -1887,7 +1825,6 @@ function bindEvents() {
         showToast(ok ? 'Link copied!' : 'Copy failed', ok ? 'success' : 'error');
     });
 
-    // Boost shortcut — scroll to plans
     on('boostShortcutBtn', () => {
         const boostScroll = document.querySelector('.boost-scroll');
         if (!boostScroll) return;
@@ -1921,12 +1858,10 @@ function bindEvents() {
         const ms = e.target.closest('[data-ms]');
         if (ms) { claimMilestone(ms.dataset.ms); return; }
 
-        // Close boost modal on overlay click
         if (e.target.id === 'boostModal') {
             closeBoostModal();
         }
 
-        // ✅ v3.5: Close video code modal on overlay click
         if (e.target.id === 'videoCodeModal') {
             closeVideoCodeModal();
         }
@@ -1934,7 +1869,7 @@ function bindEvents() {
 }
 
 // ----------------------------------------------------------------------------
-// 20. BACKGROUND EMBERS (light animation, no DB)
+// 20. BACKGROUND EMBERS
 // ----------------------------------------------------------------------------
 function startEmbers() {
     const canvas = $('embersCanvas');
@@ -1999,8 +1934,6 @@ function startEmbers() {
 
 // ============================================================================
 // ✅ v3.9 — FAKE WITHDRAW FEED (Live Social Proof) — Enhanced
-// 200 fake withdrawal notifications shown ONLY on Wallet page.
-// Each toast: title + user ID + amount + time · every 20s (8s visible + 12s gap)
 // ============================================================================
 
 const FAKE_WITHDRAW_DATA = [
@@ -2211,9 +2144,8 @@ const FAKE_WITHDRAW_DATA = [
     { id: '716****2058', amount: 2000 }
 ];
 
-// State
-const FAKE_FEED_SHOW_MS = 8000;     // visible duration
-const FAKE_FEED_GAP_MS  = 60000;    // gap after hide (total cycle = 20s)
+const FAKE_FEED_SHOW_MS = 8000;
+const FAKE_FEED_GAP_MS  = 60000;
 
 let fakeFeedQueue = [];
 let fakeFeedTimer = null;
@@ -2252,13 +2184,11 @@ function showNextFakeWithdraw() {
     const item = fakeFeedQueue.shift();
     if (!item) return;
 
-    // Respect reduced motion
     const reduceMotion = window.matchMedia &&
         window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     const container = getFeedContainer();
 
-    // ✅ v3.9: Enhanced toast design — title + user + amount + time
     const toast = document.createElement('div');
     toast.className = 'fake-withdraw-toast';
     toast.innerHTML = `
@@ -2279,14 +2209,12 @@ function showNextFakeWithdraw() {
     container.appendChild(toast);
     fakeFeedCurrent = toast;
 
-    // Trigger slide-in on next frame
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             toast.classList.add('show');
         });
     });
 
-    // Hide after SHOW_MS
     fakeFeedHideTimer = setTimeout(() => {
         toast.classList.add('hide');
         setTimeout(() => {
@@ -2295,7 +2223,6 @@ function showNextFakeWithdraw() {
         fakeFeedCurrent = null;
     }, FAKE_FEED_SHOW_MS);
 
-    // Schedule next
     fakeFeedTimer = setTimeout(showNextFakeWithdraw, FAKE_FEED_SHOW_MS + FAKE_FEED_GAP_MS);
 }
 
@@ -2305,7 +2232,6 @@ function startFakeWithdrawFeed() {
     rebuildFakeFeedQueue();
     console.log('💸 Fake withdraw feed started');
 
-    // First toast after 3s so page has time to settle
     fakeFeedTimer = setTimeout(showNextFakeWithdraw, 3000);
 }
 
@@ -2315,7 +2241,6 @@ function stopFakeWithdrawFeed() {
     if (fakeFeedTimer) { clearTimeout(fakeFeedTimer); fakeFeedTimer = null; }
     if (fakeFeedHideTimer) { clearTimeout(fakeFeedHideTimer); fakeFeedHideTimer = null; }
 
-    // Remove visible toast immediately
     const container = $('fakeWithdrawFeed');
     if (container) container.innerHTML = '';
     fakeFeedCurrent = null;
@@ -2345,10 +2270,6 @@ function init() {
         updateWalletConnectBtn();
     });
 
-    // ✅ v3.7: No periodic price refresh — fetch happens once inside enterApp()
-    // and on manual refresh via the 🔄 button (refreshTokenBtn).
-    // This removes the previous `setInterval(fetchTokenPrice, 60000)`.
-
     let lastVisible = Date.now();
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden && booted && Date.now() - lastVisible > 60000) {
@@ -2357,8 +2278,27 @@ function init() {
         }
     });
 
-    // ✅ v3.8: Stop the fake feed when tab becomes hidden
-    document.addEventListener('visibilitychange', () => {
+    // ✅ تعديل 3: استعادة الاتصال عند العودة للتطبيق بعد إعادة تحميل WebView على أندرويد
+    document.addEventListener('visibilitychange', async () => {
+        if (!document.hidden && window.tonConnectUI) {
+            try {
+                const wallet = await window.tonConnectUI.restoreConnection();
+                if (wallet) {
+                    console.log('✅ TON Connect session restored on visibilitychange');
+                    let friendly = wallet.account.address;
+                    try {
+                        friendly = window.TON_CONNECT_UI.toUserFriendlyAddress(wallet.account.address, false);
+                    } catch {}
+                    tonConnected = true;
+                    tonWalletAddress = friendly;
+                    updateWalletConnectBtn();
+                    hideWalletError();
+                }
+            } catch (e) {
+                console.warn('restoreConnection on visibility failed:', e);
+            }
+        }
+
         if (document.hidden) {
             stopFakeWithdrawFeed();
         } else if (document.querySelector('.nav-item.active')?.dataset.page === 'wallet') {
