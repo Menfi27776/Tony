@@ -2710,3 +2710,44 @@ input:focus-visible,
     display: none !important;
   }
 }
+
+/* ============================================
+   Wallet Error Box — Professional Style
+   ============================================ */
+.wallet-error-box {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    margin: 12px 0;
+    background: rgba(255, 77, 0, 0.10);
+    border: 1px solid rgba(255, 77, 0, 0.45);
+    border-left: 3px solid #FF4D00;
+    border-radius: 10px;
+    color: #FF8A5B;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.4;
+    animation: walletErrorFadeIn 0.3s ease;
+}
+
+.wallet-error-box i {
+    flex-shrink: 0;
+    font-size: 16px;
+    color: #FF4D00;
+}
+
+.wallet-error-box span {
+    flex: 1;
+}
+
+@keyframes walletErrorFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
