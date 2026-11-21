@@ -204,14 +204,10 @@ function initTonConnect() {
     const root = $('ton-connect-btn');
     if (!root) { console.error('#ton-connect-btn missing'); return; }
     try {
-        // ✅ تعديل 1: وضع twaReturnUrl داخل actionsConfiguration (المكان الصحيح)
         window.tonConnectUI = new window.TON_CONNECT_UI.TonConnectUI({
             manifestUrl: location.origin + '/tonconnect-manifest.json',
             buttonRootId: 'ton-connect-btn',
-            language: 'en',
-            actionsConfiguration: {
-                twaReturnUrl: `https://t.me/${CONFIG.botUsername}/${CONFIG.botShortName}`
-            }
+            language: 'en'
         });
 
         window.tonConnectUI.onStatusChange(async (wallet) => {
@@ -230,14 +226,6 @@ function initTonConnect() {
             tonWalletAddress = friendly;
             updateWalletConnectBtn();
             hideWalletError();
-
-            // إغلاق النافذة المنبثقة فوراً بعد نجاح الربط
-            try {
-                window.tonConnectUI.closeModal();
-                console.log('✅ TON Connect modal closed after successful connection');
-            } catch (e) {
-                console.warn('closeModal failed:', e);
-            }
 
             if (booted && currentUser && currentUser.wallet === friendly) {
                 updateHeaderWallet();
@@ -307,7 +295,6 @@ function hideWalletError() {
     if (box) box.style.display = 'none';
 }
 
-// ✅ تعديل 2: استخدام openModal() بدلاً من connectWallet() لإزالة رسالة الخطأ
 async function onWalletConnectBtnClick() {
     if (!window.tonConnectUI) return;
     try {
@@ -315,8 +302,7 @@ async function onWalletConnectBtnClick() {
             await window.tonConnectUI.disconnect();
             vibrate('light');
         } else {
-            // فتح المودال (الطريقة الموصى بها) بدلاً من connectWallet() المهجورة
-            await window.tonConnectUI.openModal();
+            await window.tonConnectUI.connectWallet();
             vibrate('medium');
         }
     } catch (e) {
@@ -2349,17 +2335,6 @@ function init() {
             stopFakeWithdrawFeed();
         } else if (document.querySelector('.nav-item.active')?.dataset.page === 'wallet') {
             startFakeWithdrawFeed();
-        }
-    });
-
-    // ✅ تعديل 3: استعادة الاتصال عند العودة للتطبيق بعد إعادة تحميل WebView على أندرويد
-    document.addEventListener('visibilitychange', async () => {
-        if (document.hidden || !window.tonConnectUI) return;
-        if (window.tonConnectUI.connected) return;
-        try {
-            await window.tonConnectUI.connector.restoreConnection();
-        } catch (e) {
-            console.warn('restoreConnection on visibility failed:', e);
         }
     });
 }
