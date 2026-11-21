@@ -210,6 +210,26 @@ function initTonConnect() {
             language: 'en'
         });
 
+        // ✅ الحل: استعادة الجلسة تلقائياً عند تحميل الصفحة (خاصة بعد إعادة تحميل WebView على أندرويد)
+        window.tonConnectUI.restoreConnection().then(async (wallet) => {
+            if (wallet) {
+                console.log('✅ TON Connect session restored after reload');
+                let friendly = wallet.account.address;
+                try {
+                    friendly = window.TON_CONNECT_UI.toUserFriendlyAddress(wallet.account.address, false);
+                } catch {}
+                tonConnected = true;
+                tonWalletAddress = friendly;
+                updateWalletConnectBtn();
+                hideWalletError();
+                if (booted && currentUser && currentUser.wallet === friendly) {
+                    updateHeaderWallet();
+                }
+            }
+        }).catch((e) => {
+            console.warn('restoreConnection failed:', e);
+        });
+
         window.tonConnectUI.onStatusChange(async (wallet) => {
             if (!wallet) {
                 tonConnected = false;
@@ -226,6 +246,14 @@ function initTonConnect() {
             tonWalletAddress = friendly;
             updateWalletConnectBtn();
             hideWalletError();
+
+            // ✅✅✅ الحل: إغلاق النافذة المنبثقة فوراً بعد نجاح الربط
+            try {
+                window.tonConnectUI.closeModal();
+                console.log('✅ TON Connect modal closed after successful connection');
+            } catch (e) {
+                console.warn('closeModal failed:', e);
+            }
 
             if (booted && currentUser && currentUser.wallet === friendly) {
                 updateHeaderWallet();
