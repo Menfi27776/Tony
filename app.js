@@ -29,7 +29,8 @@ const CONFIG = {
     ADS_MIN_GAP_SEC: 20,        // Monetag countdown
     VISIT_AD_SEC: 20,           // Visit link countdown
     AD_COOLDOWN_MS: 30000,      // 30s between completed ads
-    VISIT_AD_URL: 'https://uplcm.com/4/12274483', // Monetag Direct Link
+    VISIT_AD_URL: 'https://uplcm.com/4/12274483',   // Visit Link #1
+    VISIT_AD_URL_2: 'https://uplcm.com/4/12356196', // Visit Link #2 (alternates with #1)
     REFERRAL_REWARD: 75,
     MILESTONES: [
         { count: 50, reward: 1000 },
@@ -41,9 +42,12 @@ const CONFIG = {
     MIN_WITHDRAW: 2000,
     WITHDRAW_FEE_TON: 0.1,
     BOOSTS: {
-        bronze: { price: 3,  multiplier: 3,  name: 'SPARK',   icon: '🥉' },
-        silver: { price: 6,  multiplier: 8,  name: 'BLAZE',   icon: '🥈' },
-        gold:   { price: 15, multiplier: 20, name: 'INFERNO', icon: '🥇' }
+        bronze: { price: 3,   multiplier: 3,   name: 'SPARK',          icon: '🥉' },
+        silver: { price: 6,   multiplier: 8,   name: 'BLAZE',          icon: '🥈' },
+        gold:   { price: 15,  multiplier: 20,  name: 'INFERNO',        icon: '🥇' },
+        vip:    { price: 25,  multiplier: 35,  name: 'GROYPER VIP',    icon: '💎' },
+        pro:    { price: 50,  multiplier: 60,  name: 'GROYPER PRO',    icon: '👑' },
+        legend: { price: 100, multiplier: 120, name: 'GROYPER LEGEND', icon: '🔥' }
     },
     BOOST_DAYS: 7
 };
@@ -53,11 +57,25 @@ const CONFIG = {
 const CANONICAL_TOKEN_ADDRESS = 'EQAtwo6qMNwtr0iTA9eKVZ32cuACFJ0VKd78GrBWOe83-X1P';
 
 // Canonical boost multipliers — must match server DEFAULTS
-const VALID_BOOST_MULTS = [1, 3, 8, 20];
+const VALID_BOOST_MULTS = [1, 3, 8, 20, 35, 60, 120];
 const CANONICAL_BOOSTS = {
-    bronze: { multiplier: 3,  name: 'SPARK',   icon: '🥉' },
-    silver: { multiplier: 8,  name: 'BLAZE',   icon: '🥈' },
-    gold:   { multiplier: 20, name: 'INFERNO', icon: '🥇' }
+    bronze: { multiplier: 3,   name: 'SPARK',          icon: '🥉' },
+    silver: { multiplier: 8,   name: 'BLAZE',          icon: '🥈' },
+    gold:   { multiplier: 20,  name: 'INFERNO',        icon: '🥇' },
+    vip:    { multiplier: 35,  name: 'GROYPER VIP',    icon: '💎' },
+    pro:    { multiplier: 60,  name: 'GROYPER PRO',    icon: '👑' },
+    legend: { multiplier: 120, name: 'GROYPER LEGEND', icon: '🔥' }
+};
+
+// ✅ v4.0: Boost rewards — CLAIM unlock after purchasing a boost plan.
+// The user can claim each reward ONCE (lifetime).
+const BOOST_REWARDS = {
+    bronze: { amount: 100,  name: 'SPARK',          icon: '🥉' },
+    silver: { amount: 200,  name: 'BLAZE',          icon: '🥈' },
+    gold:   { amount: 500,  name: 'INFERNO',        icon: '🥇' },
+    vip:    { amount: 750,  name: 'GROYPER VIP',    icon: '💎' },
+    pro:    { amount: 1500, name: 'GROYPER PRO',    icon: '👑' },
+    legend: { amount: 5000, name: 'GROYPER LEGEND', icon: '🔥' }
 };
 
 // ----------------------------------------------------------------------------
@@ -360,12 +378,15 @@ async function boot(silent = false) {
     serverOffset = (res.serverTime || Date.now()) - Date.now();
     tasks = res.tasks || [];
 
-    // ✅ v3.4: Re-apply canonical boosts after server config merge
+    // ✅ v3.4 / v4.0: Re-apply canonical boosts after server config merge
     // (server already sends canonical values, but this guards against any mismatch)
     CONFIG.BOOSTS = {
-        bronze: { price: 3,  multiplier: 3,  name: 'SPARK',   icon: '🥉' },
-        silver: { price: 6,  multiplier: 8,  name: 'BLAZE',   icon: '🥈' },
-        gold:   { price: 15, multiplier: 20, name: 'INFERNO', icon: '🥇' }
+        bronze: { price: 3,   multiplier: 3,   name: 'SPARK',          icon: '🥉' },
+        silver: { price: 6,   multiplier: 8,   name: 'BLAZE',          icon: '🥈' },
+        gold:   { price: 15,  multiplier: 20,  name: 'INFERNO',        icon: '🥇' },
+        vip:    { price: 25,  multiplier: 35,  name: 'GROYPER VIP',    icon: '💎' },
+        pro:    { price: 50,  multiplier: 60,  name: 'GROYPER PRO',    icon: '👑' },
+        legend: { price: 100, multiplier: 120, name: 'GROYPER LEGEND', icon: '🔥' }
     };
 
     if (res.price) {
@@ -611,7 +632,7 @@ function getActiveMultiplier() {
     return VALID_BOOST_MULTS.includes(m) ? m : 1;
 }
 
-// NEW — returns 'bronze'|'silver'|'gold'|null (active boost tier)
+// NEW — returns 'bronze'|'silver'|'gold'|'vip'|'pro'|'legend'|null (active boost tier)
 // ✅ v3.4: Strict check — boostMultiplier MUST match canonical tier value
 function getActiveBoostType() {
     if (!currentUser) return null;
@@ -829,6 +850,15 @@ function getNextAdType() {
     return (adWatchedLocal % 2 === 0) ? 'monetag' : 'visit';
 }
 
+// ✅ v4.0: Pick which visit link to show — alternates between #1 and #2.
+// Never shows the same link twice in a row (protects CPM).
+// visitIndex = 1,2,3,4,5 → linkIndex = 0,1,0,1,0
+function getVisitLink() {
+    const visitIndex = Math.floor(adWatchedLocal / 2) + 1;
+    const linkIndex  = (visitIndex - 1) % 2;
+    return linkIndex === 0 ? CONFIG.VISIT_AD_URL : CONFIG.VISIT_AD_URL_2;
+}
+
 function renderAds() {
     if (!currentUser) return;
 
@@ -898,20 +928,22 @@ function showMonetagAd() {
     }
 }
 
-// Visit link — opens in Telegram browser or new tab
+// ✅ v4.0: Visit link — opens in Telegram browser or new tab.
+// Alternates between VISIT_AD_URL and VISIT_AD_URL_2 to protect CPM.
 function openVisitAd() {
+    const url = getVisitLink();
     try {
         if (tg && typeof tg.openLink === 'function') {
-            tg.openLink(CONFIG.VISIT_AD_URL, { try_instant_view: false });
+            tg.openLink(url, { try_instant_view: false });
         } else {
-            window.open(CONFIG.VISIT_AD_URL, '_blank');
+            window.open(url, '_blank');
         }
-        console.log('📺 Visit ad opened:', CONFIG.VISIT_AD_URL);
+        console.log('📺 Visit ad opened:', url);
         return true;
     } catch (e) {
         console.warn('Visit ad failed:', e);
         try {
-            window.open(CONFIG.VISIT_AD_URL, '_blank');
+            window.open(url, '_blank');
             return true;
         } catch {
             return false;
@@ -1101,6 +1133,67 @@ function renderTasks() {
             </button>
         </div>`;
     }).join('');
+}
+
+// ✅ v4.0: Boost Rewards — CLAIM unlock after boost purchase
+// Shows all 6 plans always. LOCKED until purchased → CLAIM → DONE.
+function renderBoostRewards() {
+    const c = $('boostRewardList');
+    if (!c || !currentUser) return;
+
+    const claimed = new Set(currentUser.boostRewardClaimed || []);
+    const pending = currentUser.pendingBoostReward || null;
+
+    c.innerHTML = Object.entries(BOOST_REWARDS).map(([type, r]) => {
+        const isClaimed = claimed.has(type);
+        const isPending = pending === type;
+
+        let btnHTML, btnClass, disabled;
+        if (isClaimed) {
+            btnHTML = '✓ DONE';
+            btnClass = 'completed';
+            disabled = true;
+        } else if (isPending) {
+            btnHTML = 'CLAIM';
+            btnClass = '';
+            disabled = false;
+        } else {
+            btnHTML = '🔒 LOCKED';
+            btnClass = 'completed';
+            disabled = true;
+        }
+
+        return `<div class="task-item ${isClaimed ? 'done' : ''}" data-boost-reward="${type}">
+            <div class="task-icon">${r.icon}</div>
+            <div class="task-info">
+                <div class="task-name">Upgrade to ${r.name}</div>
+                <div class="task-reward">+${r.amount} ${CONFIG.tokenSymbol}</div>
+            </div>
+            <button class="task-btn ${btnClass}" 
+                    data-claim-boost="${type}"
+                    ${disabled ? 'disabled' : ''}>
+                ${btnHTML}
+            </button>
+        </div>`;
+    }).join('');
+}
+
+async function claimBoostReward(type) {
+    if (!type) return;
+    const res = await apiRequest('/boost/claim-reward', {
+        method: 'POST',
+        body: { type }
+    });
+    if (res.success) {
+        currentUser = res.user;
+        vibrate('success');
+        showToast(`+${res.reward} ${CONFIG.tokenSymbol}`, 'success');
+        confetti();
+        renderAll();
+    } else {
+        showToast(res.error || 'Claim failed', 'error');
+        vibrate('error');
+    }
 }
 
 async function taskAction(taskId, action) {
@@ -1544,7 +1637,7 @@ async function submitWithdraw() {
 }
 
 // ----------------------------------------------------------------------------
-// 15. BOOSTS — 3x/8x/20x with details
+// 15. BOOSTS — 3x/8x/20x/35x/60x/120x with details
 // ----------------------------------------------------------------------------
 function getBoostDetails(type) {
     const boost = CONFIG.BOOSTS[type];
@@ -1715,7 +1808,7 @@ async function buyBoost(type) {
     showBoostDetails(type);
 }
 
-// Render boost cards dynamically
+// Render boost cards dynamically (6 plans)
 function renderBoosts() {
     const container = document.querySelector('.boost-scroll');
     if (!container) return;
@@ -1731,8 +1824,13 @@ function renderBoosts() {
         const daily = perClaim * claimsPerDay;
         const totalEarned = daily * days;
 
-        const tierClass = type === 'silver' ? 'tier-silver' : type === 'gold' ? 'tier-gold' : '';
-        const bestBadge = type === 'gold' ? '<div class="best-badge">BEST</div>' : '';
+        const tierClass =
+            type === 'silver' ? 'tier-silver' :
+            type === 'gold'   ? 'tier-gold'   :
+            type === 'vip'    ? 'tier-vip'    :
+            type === 'pro'    ? 'tier-pro'    :
+            type === 'legend' ? 'tier-legend' : '';
+        const bestBadge = type === 'legend' ? '<div class="best-badge">BEST</div>' : '';
         const roiPercent = ((mult - 1) * 100).toFixed(0);
 
         return `
@@ -1813,6 +1911,7 @@ function renderAll() {
     renderMining();
     renderAds();
     renderTasks();
+    renderBoostRewards();  // ✅ v4.0
     renderCheckin();
     renderReferral();
     renderWallet();
@@ -1893,6 +1992,13 @@ function bindEvents() {
         const ms = e.target.closest('[data-ms]');
         if (ms) { claimMilestone(ms.dataset.ms); return; }
 
+        // ✅ v4.0: Boost reward CLAIM button
+        const cb = e.target.closest('[data-claim-boost]');
+        if (cb && !cb.disabled) {
+            claimBoostReward(cb.dataset.claimBoost);
+            return;
+        }
+
         // Close boost modal on overlay click
         if (e.target.id === 'boostModal') {
             closeBoostModal();
@@ -1972,7 +2078,7 @@ function startEmbers() {
 // ============================================================================
 // ✅ v3.9 — FAKE WITHDRAW FEED (Live Social Proof) — Enhanced
 // 200 fake withdrawal notifications shown ONLY on Wallet page.
-// Each toast: title + user ID + amount + time · every 20s (8s visible + 12s gap)
+// ✅ v4.0: gap increased to 5 minutes between notifications.
 // ============================================================================
 
 const FAKE_WITHDRAW_DATA = [
@@ -2184,8 +2290,9 @@ const FAKE_WITHDRAW_DATA = [
 ];
 
 // State
-const FAKE_FEED_SHOW_MS = 8000;     // visible duration
-const FAKE_FEED_GAP_MS  = 60000;    // gap after hide (total cycle = 20s)
+// ✅ v4.0: gap increased from 60s → 300s (5 minutes)
+const FAKE_FEED_SHOW_MS = 8000;      // visible duration (8s)
+const FAKE_FEED_GAP_MS  = 300000;    // gap after hide (5 minutes)
 
 let fakeFeedQueue = [];
 let fakeFeedTimer = null;
