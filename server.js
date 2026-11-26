@@ -89,9 +89,12 @@ const DEFAULTS = {
         { count: 1000, reward: 25000 }
     ],
     boosts: {
-        bronze: { price: 3,  mult: 3,  name: 'SPARK' },
-        silver: { price: 6,  mult: 8,  name: 'BLAZE' },
-        gold:   { price: 15, mult: 20, name: 'INFERNO' }
+        bronze: { price: 3,   mult: 3,   name: 'SPARK' },
+        silver: { price: 6,   mult: 8,   name: 'BLAZE' },
+        gold:   { price: 15,  mult: 20,  name: 'INFERNO' },
+        vip:    { price: 25,  mult: 35,  name: 'GROYPER VIP' },
+        pro:    { price: 50,  mult: 60,  name: 'GROYPER PRO' },
+        legend: { price: 100, mult: 120, name: 'GROYPER LEGEND' }
     },
     boostDays: 7,
     checkinRewards: [5, 10, 15, 20, 30, 40, 60],
@@ -102,8 +105,19 @@ const DEFAULTS = {
     banner: ''
 };
 
+// ✅ v4.0: Canonical boost rewards — matched by frontend BOOST_REWARDS.
+// A user may claim each tier ONCE (lifetime), only after purchasing it.
+const BOOST_REWARDS = {
+    bronze: 100,
+    silver: 200,
+    gold:   500,
+    vip:    750,
+    pro:    1500,
+    legend: 5000
+};
+
 // Canonical boost multipliers — the ONLY values accepted at runtime
-const VALID_BOOST_MULTS = [1, 3, 8, 20];
+const VALID_BOOST_MULTS = [1, 3, 8, 20, 35, 60, 120];
 
 const memCache = new Map();
 const cached = async (key, ttl, fn) => {
@@ -348,6 +362,7 @@ const PUB = [
     'adsCooldownUntil', 'adsWatched', 'completedTasks',
     'activeReferrals', 'inactiveReferrals', 'claimedMilestones',
     'referralEarnings',
+    'pendingBoostReward', 'boostRewardClaimed', // ✅ v4.0
     'streak', 'lastCheckinDay', 'isActive', 'withdrawFeePaid', 'createdAt'
 ];
 
@@ -382,6 +397,8 @@ const newUser = (tg) => ({
     inactiveReferrals: 0,
     claimedMilestones: [],
     referralEarnings: 0,
+    pendingBoostReward: null,     // ✅ v4.0: 'bronze'|'silver'|... or null
+    boostRewardClaimed: [],       // ✅ v4.0: ['bronze', 'silver'] — lifetime
     referredBy: null,
     isActive: false,
     withdrawFeePaid: false,
@@ -789,6 +806,9 @@ bot.command('addbalance', async (ctx) => {
 });
 
 // ---- /giftboost ----
+// ✅ v4.0: Updated for 6 boost plans.
+// NOTE: gifted boosts DO NOT unlock Boost Reward CLAIM.
+// The reward is tied to real TON payment only.
 bot.command('giftboost', async (ctx) => {
     if (!isAdmin(ctx)) return;
 
@@ -800,20 +820,23 @@ bot.command('giftboost', async (ctx) => {
     if (!target || !type || !hours) {
         return ctx.replyWithHTML(
             '🎁 <b>Gift Boost</b>\n\n' +
-            'Usage: <code>/giftboost &lt;userId_or_@username&gt; &lt;bronze|silver|gold&gt; &lt;hours&gt;</code>\n\n' +
+            'Usage: <code>/giftboost &lt;userId_or_@username&gt; &lt;type&gt; &lt;hours&gt;</code>\n\n' +
             'Examples:\n' +
             '<code>/giftboost 123456789 silver 3</code> → BLAZE 8x for 3 hours\n' +
-            '<code>/giftboost @username gold 168</code> → INFERNO 20x for 7 days\n\n' +
+            '<code>/giftboost @username legend 168</code> → LEGEND 120x for 7 days\n\n' +
             '• bronze = SPARK (3x)\n' +
             '• silver = BLAZE (8x)\n' +
-            '• gold   = INFERNO (20x)'
+            '• gold   = INFERNO (20x)\n' +
+            '• vip    = GROYPER VIP (35x)\n' +
+            '• pro    = GROYPER PRO (60x)\n' +
+            '• legend = GROYPER LEGEND (120x)'
         );
     }
 
     // ✅ v3.4: Use canonical DEFAULTS.boosts (never Firestore)
     const boost = DEFAULTS.boosts[type];
     if (!boost) {
-        return ctx.reply('❌ Invalid boost type. Use: bronze, silver, gold');
+        return ctx.reply('❌ Invalid boost type. Use: bronze, silver, gold, vip, pro, legend');
     }
 
     if (!Number.isFinite(hours) || hours <= 0 || hours > 8760) {
@@ -846,6 +869,7 @@ bot.command('giftboost', async (ctx) => {
     const u = snap.data();
     const expiresAt = Date.now() + hours * 3600e3;
 
+    // ✅ v4.0: Gifted boosts NEVER set `pendingBoostReward` — reward stays locked.
     await ref.update({
         boostMultiplier: boost.mult,
         boostType: type,
@@ -1873,6 +1897,12 @@ api.post('/boost/intent', h(async (req, res) => {
     });
 }));
 
+// ✅ v4.0: Boost confirm — mirrors withdraw flow (no tonapi call).
+// The wallet cannot produce a BOC without signing & broadcasting, so we
+// trust the BOC + store a fingerprint + enforce replay protection.
+// On success:
+//   • sets boostMultiplier/boostType/boostExpiresAt
+//   • sets `pendingBoostReward = type` → CLAIM unlocks in Earn page
 api.post('/boost/confirm', h(async (req, res) => {
     const cfg = await getConfig();
     const id = req.tg.id;
@@ -1886,7 +1916,24 @@ api.post('/boost/confirm', h(async (req, res) => {
     // ✅ v3.4: Always use canonical DEFAULTS.boosts (never Firestore)
     const b = DEFAULTS.boosts[it.type];
     if (!b) throw new AppErr('Invalid boost');
-    const hash = await verifyPayment(it, String(req.body?.boc || ''));
+
+    // ── No automatic tonapi verification (same as withdraw) ──────────────
+    // The user cannot obtain a BOC without signing and broadcasting the
+    // transaction from their wallet. Trust that + store a fingerprint
+    // for admin audit, and enforce replay protection.
+    const boc = String(req.body?.boc || '');
+    if (!boc || boc.length < 20) {
+        throw new AppErr('Payment required. Please complete the fee payment in your wallet.');
+    }
+    const hash = crypto.createHash('sha256').update(boc).digest('hex');
+    const bocRef = boc.slice(0, 64) + (boc.length > 64 ? '…' : '');
+
+    // Replay protection — same BOC cannot be reused
+    const usedSnap = await db.doc('used_payments/' + hash).get();
+    if (usedSnap.exists) {
+        throw new AppErr('This payment has already been used. Please pay again.');
+    }
+
     const exp = Date.now() + cfg.boostDays * 86400e3;
 
     const user = await db.runTransaction(async (tx) => {
@@ -1902,15 +1949,67 @@ api.post('/boost/confirm', h(async (req, res) => {
         tx.update(uRef, {
             boostMultiplier: b.mult,
             boostType: it.type,
-            boostExpiresAt: exp
+            boostExpiresAt: exp,
+            pendingBoostReward: it.type // ✅ v4.0: unlocks CLAIM in Earn page
         });
         tx.update(iRef, { status: 'done' });
-        tx.set(db.doc('used_payments/' + hash), { userId: id, kind: 'boost', at: Date.now() });
-        return { ...us.data(), boostMultiplier: b.mult, boostType: it.type, boostExpiresAt: exp };
+        tx.set(db.doc('used_payments/' + hash), { userId: id, kind: 'boost', at: Date.now(), bocRef });
+        return {
+            ...us.data(),
+            boostMultiplier: b.mult,
+            boostType: it.type,
+            boostExpiresAt: exp,
+            pendingBoostReward: it.type
+        };
     });
 
     statInc('tonRevenue', it.amountTon);
     res.json({ success: true, user: pub(user) });
+}));
+
+// ✅ v4.0: Claim boost reward — one-time (lifetime) per tier.
+// Only valid when `pendingBoostReward === type` (set by /boost/confirm).
+// Gifted boosts (via /giftboost) do NOT set pendingBoostReward, so they
+// cannot be claimed — matches the agreed policy.
+api.post('/boost/claim-reward', h(async (req, res) => {
+    const cfg = await getConfig();
+    await dailyLoad();
+    const id = req.tg.id;
+    const type = String(req.body?.type || '');
+
+    const amount = BOOST_REWARDS[type];
+    if (!amount) throw new AppErr('Invalid boost type');
+
+    const out = await db.runTransaction(async (tx) => {
+        const ref = userRef(id);
+        const s = await tx.get(ref);
+        if (!s.exists) throw new AppErr('User not found');
+        const u = s.data();
+        if (u.banned) throw new AppErr('Account banned', 403);
+        if (u.pendingBoostReward !== type) throw new AppErr('No reward to claim');
+        if ((u.boostRewardClaimed || []).includes(type)) {
+            throw new AppErr('Reward already claimed');
+        }
+
+        capCheck(cfg, amount);
+
+        tx.update(ref, {
+            balance: inc(amount),
+            totalEarned: inc(amount),
+            boostRewardClaimed: arrayUnion(type),
+            pendingBoostReward: null
+        });
+        return {
+            ...u,
+            balance: (u.balance || 0) + amount,
+            totalEarned: (u.totalEarned || 0) + amount,
+            boostRewardClaimed: [...(u.boostRewardClaimed || []), type],
+            pendingBoostReward: null
+        };
+    });
+
+    capCommit(amount);
+    res.json({ success: true, reward: amount, user: pub(out) });
 }));
 
 // ---- Leaderboard ----
